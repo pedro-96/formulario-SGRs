@@ -91,6 +91,21 @@ def seleccionar_provincia_y_localidad(key_prov, key_loc):
 
     return provincia_seleccionada, localidad_seleccionada
 
+from PIL import Image
+from pathlib import Path
+
+# Ruta base: carpeta del script
+base_path = Path(__file__).parent
+
+# Imagen que debería estar junto al .py
+img_path = base_path / "logo2QTM.png"
+
+# Si existe, la mostramos
+if img_path.exists():
+    imagen = Image.open(img_path)
+    st.image(imagen)
+else:
+    st.error("No se encuentra la imagen en la ruta esperada.")
 
 tabs = st.tabs([
     "**Información General**",
@@ -2767,7 +2782,7 @@ if st.session_state.get("confirmar_borrado", False):
                 st.session_state[k] = v
 
             # Mostrar advertencia para refrescar
-            st.markdown("### 🧹 ¡Todo fue borrado!")
+            st.markdown("#####¡Todo fue borrado!")
             st.warning("🚨 **IMPORTANTE:** Refrescá la página (F5 o Ctrl+R) para ver el formulario completamente vacío.")
             st.stop()  
 
