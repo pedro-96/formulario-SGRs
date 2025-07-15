@@ -43,16 +43,16 @@ if "formulario_identificado" not in st.session_state:
     st.session_state.formulario_identificado = False
 
 if not st.session_state.formulario_identificado:
-    st.markdown("### 📁 Identificación del Formulario")
+    st.markdown("### Crear o usar clave para empezar formulario")
 
     codigo_usuario = st.text_input(
-        "Elegí un código único y personal para guardar tu formulario",
-        max_chars=30,
-        placeholder="Ej: cliente001, empresaA, etc."
+        "Escriba su CUIT/CUIL este será usado como ID para que su formulario sea único",
+        max_chars=11,
+        placeholder="Ej: 30888888885"
     )
 
     if not codigo_usuario:
-        st.warning("🔑 Ingresá un código para continuar.")
+        st.warning("🔑 Ingresá tu CUIT/CUIL para continuar.")
         st.stop()
 
     st.session_state.codigo_usuario = codigo_usuario
@@ -73,7 +73,7 @@ if not st.session_state.formulario_identificado:
                 ):
                     if k not in st.session_state:
                         st.session_state[k] = v
-            st.success(f"✅ Progreso cargado desde '{PROGRESO_FILE}'.")
+            st.success(f"✅ Progreso cargado para el CUIT/CUIL'{PROGRESO_FILE}'.")
         except Exception as e:
             st.warning(f"⚠️ No se pudo cargar el progreso anterior: {e}")
 
@@ -223,7 +223,7 @@ with tabs[0]:
         with col2:
             st.session_state.respuestas["Número (real y legal)"] = st.text_input("Número", key="real y legal2")
         with col3:
-            st.session_state.respuestas["CP (real y legal)"] = st.text_input("CP (8 Dígitos)", key="real y legal3")
+            st.session_state.respuestas["CP (real y legal)"] = st.text_input("CP", key="real y legal3")
         
         col4, col5 = st.columns(2)
         with col4:
@@ -245,7 +245,7 @@ with tabs[0]:
         with col2:
             st.session_state.respuestas["Número (comercial)"] = st.text_input("Número", key="comercial2")
         with col3:
-            st.session_state.respuestas["CP (comercial)"] = st.text_input("CP (8 Dígitos)", key="comercial3")
+            st.session_state.respuestas["CP (comercial)"] = st.text_input("CP", key="comercial3")
 
         col4, col5 = st.columns(2)
         with col4:
@@ -268,7 +268,7 @@ with tabs[0]:
         with col2:
             st.session_state.respuestas["Número (constituido)"] = st.text_input("Número", key="constituido2")
         with col3:
-            st.session_state.respuestas["CP (constituido)"] = st.text_input("CP (8 Dígitos)", key="constituido3")
+            st.session_state.respuestas["CP (constituido)"] = st.text_input("CP", key="constituido3")
 
         col4, col5 = st.columns(2)
         with col4:
