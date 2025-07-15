@@ -11,8 +11,8 @@ import datetime
 
 
 # --- Login simple (sin base de datos)
-USUARIO = "pedro"
-CLAVE = "1234"
+USUARIO = "QTM"
+CLAVE = "capital"
 
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
@@ -36,27 +36,77 @@ if not st.session_state.autenticado:
 
 # 🔄 Convertir el diccionario respuestas anidado en una lista de DataFrames
 from pandas import json_normalize
-PROGRESO_FILE = "progreso_usuario.pkl"
 
-# ✅ Carga segura del progreso guardado (filtra claves conflictivas)
-if os.path.exists(PROGRESO_FILE):
-    try:
-        with open(PROGRESO_FILE, "rb") as f:
-            estado_guardado = pickle.load(f)
-            for k, v in estado_guardado.items():
+
+# === BLOQUE DE IDENTIFICACIÓN DE FORMULARIO ===
+if "formulario_identificado" not in st.session_state:
+    st.session_state.formulario_identificado = False
+
+if not st.session_state.formulario_identificado:
+    st.markdown("### 📁 Identificación del Formulario")
+
+    codigo_usuario = st.text_input(
+        "Elegí un código único y personal para guardar tu formulario",
+        max_chars=30,
+        placeholder="Ej: cliente001, empresaA, etc."
+    )
+
+    if not codigo_usuario:
+        st.warning("🔑 Ingresá un código para continuar.")
+        st.stop()
+
+    st.session_state.codigo_usuario = codigo_usuario
+    PROGRESO_FILE = f"progreso_{codigo_usuario}.pkl"
+
+    if os.path.exists(PROGRESO_FILE):
+        try:
+            with open(PROGRESO_FILE, "rb") as f:
+                progreso_guardado = pickle.load(f)
+            for k, v in progreso_guardado.items():
                 if (
-                    not k.startswith("delete_")
-                    and not k.startswith("eliminar_cultivo_")
+                    not k.startswith("editor_")
                     and not k.startswith("FormSubmitter:")
-                    and "Agregar Cultivo" not in k
+                    and not k.startswith("delete_")
+                    and not k.startswith("guardar_")
+                    and not k.startswith("_")
+                    and "Agregar" not in k
                 ):
                     if k not in st.session_state:
                         st.session_state[k] = v
-        # st.success("🟢 Progreso cargado automáticamente.")
-    except Exception as e:
-        st.warning(f"⚠️ No se pudo cargar el progreso: {e}")
+            st.success(f"✅ Progreso cargado desde '{PROGRESO_FILE}'.")
+        except Exception as e:
+            st.warning(f"⚠️ No se pudo cargar el progreso anterior: {e}")
 
+    # ⚠️ Clave para ocultar el bloque y refrescar
+    st.session_state.formulario_identificado = True
+    st.rerun()
 
+else:
+    codigo_usuario = st.session_state.get("codigo_usuario", "default")
+    PROGRESO_FILE = f"progreso_{codigo_usuario}.pkl"
+
+# Mostrar cartel post-descarga antes del resto del formulario
+if st.session_state.get("descarga_confirmada", False):
+    st.success("##### ✅ Archivo descargado correctamente")
+    st.markdown("**¿Deseás eliminar el progreso guardado y cerrar sesión o continuar completando el formulario?**")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("**❌ Borrar progreso para cerrar la sesión**"):
+            try:
+                os.remove(PROGRESO_FILE)
+                st.session_state.clear()
+                st.success("**Progreso eliminado. Podés cerrar esta ventana o recargar para comenzar de nuevo.**")
+                st.stop()
+            except Exception as e:
+                st.error(f"❌ Error al borrar el archivo: {e}")
+    with col2:
+        if st.button("**⬅️ Seguir cargando el formulario**"):
+            st.session_state["descarga_confirmada"] = False
+            st.rerun()
+
+    # IMPORTANTE: cortar la ejecución del resto del formulario
+    st.stop()
 
 # Crear Tabs principales 
 @st.cache_data(ttl=86400, show_spinner=False )
@@ -111,7 +161,6 @@ tabs = st.tabs([
     "**Información General**",
     "**Deudas Bancarias y Financieras**",
     "**Ventas y Compras**",
-    "**Manifestación de Bienes**",
     "**Adicional Empresas Agro.**"
 ])
 
@@ -978,15 +1027,17 @@ with tabs[0]:
                 "DNI": dni_rep
             }
         }
-# --- BLOQUE DE DEUDA BANCARIA Y FINANCIERAS ---
+
+
+
 with tabs[1]:
-    # --- OPCIONES FIJAS ---
     opciones_garantia = ["", "Fianza / Sola Firma (F)", "Prenda (P)", "Hipoteca (H)", "Warrant (W)", "Forward (FW)", "Cesión (C)", "Plazo Fijo (PF)"]
     opciones_regimen = ["", "Mensual", "Bimestral", "Trimestral", "Semestral", "Anual"]
+    monedas = ["ARS", "USD"]
 
-    # --- FUNCIONES NUEVA FILA ---
-    def new_banco_row():
-        return {
+    # Inicialización de dataframes en session_state si no existen
+    if "bancos" not in st.session_state:
+        st.session_state.bancos = pd.DataFrame([{
             "Entidad": "",
             "Saldo Préstamos Amortizables": 0,
             "Garantía (*)": "",
@@ -1002,10 +1053,10 @@ with tabs[1]:
             "Tasa Promedio $": 0.0,
             "Tasa Promedio USD": 0.0,
             "Tipo de Moneda": "ARS"
-        }
+        }] * 2)
 
-    def new_mercado_row():
-        return {
+    if "mercado" not in st.session_state:
+        st.session_state.mercado = pd.DataFrame([{
             "Obligaciones Negociables": 0,
             "Descuento de Cheques Propios": 0,
             "Pagaré Bursátil": 0,
@@ -1015,953 +1066,248 @@ with tabs[1]:
             "Tasa Promedio $": 0.0,
             "Tasa Promedio USD": 0.0,
             "Tipo de Moneda": "ARS"
-        }
+        }] * 2)
 
-    # --- INICIALIZAR ESTADO ---
-    if "bancos" not in st.session_state:
-        st.session_state.bancos = []
-    if "mercado" not in st.session_state:
-        st.session_state.mercado = []
-
-    # ========================
-    # BLOQUE 1 - BANCOS
-    # ========================
-    with st.expander("**Cargar Deuda Bancaria**"):
-        with st.form("form_banco"):
-            col1, col2, col3 = st.columns(3)
-            ent = col1.text_input("Entidad", key="banco_ent_nuevo")
-            saldo = col2.number_input("Monto en Saldo Préstamos Amortizables", key="banco_saldo_nuevo", min_value=0.0)
-            garantia = col3.selectbox("Garantía (*)", opciones_garantia, key="banco_garantia_nuevo")
-
-            col4, col5, col6 = st.columns(3)
-            cuota = col4.number_input("Valor de la Cuota", key="banco_cuota_nuevo", min_value=0.0)
-            regimen = col5.selectbox("Régimen de Amortización (**)", opciones_regimen, key="banco_regimen_nuevo")
-            cuotas_falt = col6.number_input("Cantidad Cuotas Faltantes", key="banco_cuotas_falt_nuevo", min_value=0)
-
-            col7, col8, col9 = st.columns(3)
-            cheques = col7.number_input("Monto en Descuento de Cheques Utilizado", key="banco_cheques_nuevo", min_value=0.0)
-            cta_cte = col8.number_input("Monto en Adelanto en Cta Cte Utilizado", key="banco_cta_nuevo", min_value=0.0)
-            avales = col9.number_input("Monto en Avales SGR", key="banco_avales_nuevo", min_value=0.0)
-
-            col10, col11, col12 = st.columns(3)
-            tarjeta = col10.number_input("Monto en Tarjeta de Crédito Utilizado", key="banco_tarjeta_nuevo", min_value=0.0)
-            leasing = col11.number_input("Monto en Leasing Utilizado", key="banco_leasing_nuevo", min_value=0.0)
-            impoexpo = col12.number_input("Monto en Impo/Expo Utilizado", key="banco_impoexpo_nuevo", min_value=0.0)
-
-            col13, col14 = st.columns(2)
-            tasa_ars = col13.number_input("Tasa Promedio % en ARS", key="banco_tasa_ars_nuevo", min_value=0.0)
-            tasa_usd = col14.number_input("Tasa Promedio % en USD", key="banco_tasa_usd_nuevo", min_value=0.0)
-
-            moneda = st.selectbox("Tipo de Moneda", ["ARS", "USD"], key="banco_moneda_nuevo")
-
-            submit_banco = st.form_submit_button("Agregar Deuda Bancaria")
-
-        if submit_banco:
-            errores = []
-            if not ent.strip():
-                errores.append("❌ El nombre de la entidad es obligatorio.")
-
-            if errores:
-                for e in errores:
-                    st.error(e)
-            else:
-                st.session_state.bancos.append({
-                    "Entidad": ent.strip(),
-                    "Saldo Préstamos Amortizables": saldo,
-                    "Garantía (*)": garantia,
-                    "Valor de la Cuota": cuota,
-                    "Régimen de Amortización (**)": regimen,
-                    "Cantidad Cuotas Faltantes": cuotas_falt,
-                    "Descuento de Cheques Utilizado": cheques,
-                    "Adelanto en Cta Cte Utilizado": cta_cte,
-                    "Avales SGR": avales,
-                    "Tarjeta de Crédito Utilizado": tarjeta,
-                    "Leasing Utilizado": leasing,
-                    "Impo/Expo Utilizado": impoexpo,
-                    "Tasa Promedio $": tasa_ars,
-                    "Tasa Promedio USD": tasa_usd,
-                    "Tipo de Moneda": moneda
-                })
-                st.success("✅ Deuda bancaria agregada correctamente.")
-                st.rerun()
-
-        if st.session_state.bancos:
-            df_bancos = pd.DataFrame(st.session_state.bancos)
-            df_bancos["Total por Banco"] = df_bancos[
-                ["Saldo Préstamos Amortizables",
-                 "Descuento de Cheques Utilizado",
-                 "Adelanto en Cta Cte Utilizado",
-                 "Avales SGR",
-                 "Tarjeta de Crédito Utilizado",
-                 "Leasing Utilizado",
-                 "Impo/Expo Utilizado"]
-            ].sum(axis=1)
-
-            st.dataframe(df_bancos)
-
-            cols_banco = st.columns(4)
-            for i, fila in enumerate(st.session_state.bancos):
-                col = cols_banco[i % 4]
-                with col:
-                    if st.button(f"❌ Eliminar {fila['Entidad']}", key=f"delete_banco_{i}"):
-                        st.session_state.bancos.pop(i)
-                        st.rerun()
-        else:
-            df_bancos = pd.DataFrame([{
-                "Entidad": "", "Saldo Préstamos Amortizables": 0,
-                "Garantía (*)": "", "Valor de la Cuota": 0, "Régimen de Amortización (**)": "",
-                "Cantidad Cuotas Faltantes": 0, "Descuento de Cheques Utilizado": 0,
-                "Adelanto en Cta Cte Utilizado": 0, "Avales SGR": 0,
-                "Tarjeta de Crédito Utilizado": 0, "Leasing Utilizado": 0,
-                "Impo/Expo Utilizado": 0, "Tasa Promedio $": 0.0,
-                "Tasa Promedio USD": 0.0, "Tipo de Moneda": "ARS"
-            }])
-
-
-    # === FORMULARIO DEUDA EN MERCADO ===
-    with st.expander("**Cargar Deuda en el Mercado de Capitales**"):
-        with st.form("form_mercado"):
-            col1, col2, col3, col4 = st.columns(4)
-            on = col1.number_input("Monto en Obligaciones Negociables", key="mercado_on", min_value=0.0)
-            cheques = col2.number_input("Monto en Cheques Propios", key="mercado_cheques", min_value=0.0)
-            pagare = col3.number_input("Monto en Pagaré Bursátil", key="mercado_pagare", min_value=0.0)
-            cfi = col4.number_input("Monto en Organismos Multilaterales (CFI)", key="mercado_cfi", min_value=0.0)
-
-            col5, col6, col7, col8 = st.columns(4)
-            otros1 = col5.text_input("Monto en Otros (1)", key="mercado_otros1")
-            otros2 = col6.text_input("Monto en Otros (2)", key="mercado_otros2")
-            tasa_ars = col7.number_input("Tasa Promedio % ARS", key="mercado_tasa_ars", min_value=0.0)
-            tasa_usd = col8.number_input("Tasa Promedio % USD", key="mercado_tasa_usd", min_value=0.0)
-
-            moneda = st.selectbox("Tipo de Moneda de la deuda a cargar", ["ARS", "USD"], key="mercado_moneda")
-            submit_mercado = st.form_submit_button("Agregar Deuda del Mercado")
-
-        if submit_mercado:
-            st.session_state.mercado.append({
-                "Obligaciones Negociables": on,
-                "Descuento de Cheques Propios": cheques,
-                "Pagaré Bursátil": pagare,
-                "Organismos Multilaterales (CFI)": cfi,
-                "Otros (1)": otros1,
-                "Otros (2)": otros2,
-                "Tasa Promedio $": tasa_ars,
-                "Tasa Promedio USD": tasa_usd,
-                "Tipo de Moneda": moneda
-            })
-            st.success("✅ Deuda del mercado agregada correctamente.")
-            st.rerun()
-
-        if st.session_state.mercado:
-            df_mercado = pd.DataFrame(st.session_state.mercado)
-            df_mercado["Total"] = df_mercado[["Obligaciones Negociables", "Descuento de Cheques Propios", "Pagaré Bursátil", "Organismos Multilaterales (CFI)"]].sum(axis=1)
-            st.dataframe(df_mercado)
-
-            cols_mercado = st.columns(4)
-            for i, fila in enumerate(st.session_state.mercado):
-                col = cols_mercado[i % 4]
-                with col:
-                    if st.button(f"❌ Eliminar Deuda Mercado #{i+1}", key=f"delete_mercado_{i}"):
-                        st.session_state.mercado.pop(i)
-                        st.rerun()
-    
-    
-    # Inicializar si no existe
     if "deudas_comerciales" not in st.session_state:
-        st.session_state.deudas_comerciales = []
+        st.session_state.deudas_comerciales = pd.DataFrame([{
+            "A favor de": "",
+            "Tipo de Moneda": "ARS",
+            "Monto": 0.0,
+            "Garantía": "",
+            "Tasa": 0.0,
+            "Plazo (días)": 0
+        }] * 2)
 
-    # === FORMULARIO DEUDA COMERCIAL ===
-    with st.expander("**Cargar Deuda Comercial**"):
-        with st.form("form_comercial"):
-            col1, col2, col3, col4 = st.columns(4)
-            afavor = col1.text_input("A favor de", key="com_afavor")
-            moneda_com = col2.selectbox("Moneda", ["ARS", "USD"], key="com_moneda")
-            monto = col3.number_input("Monto", key="com_monto", min_value=0.0)
-            garantia = col4.text_input("Garantía", key="com_garantia")
-
-            col5, col6 = st.columns(2)
-            tasa = col5.number_input("Tasa (%)", key="com_tasa", min_value=0.0)
-            plazo = col6.number_input("Plazo (días)", key="com_plazo", min_value=0)
-
-            submit_com = st.form_submit_button("Agregar Deuda Comercial")
-
-        if submit_com:
-            st.session_state.deudas_comerciales.append({
-                "A favor de": afavor,
-                "Tipo de Moneda": moneda_com,
-                "Monto": monto,
-                "Garantía": garantia,
-                "Tasa": tasa,
-                "Plazo (días)": plazo
-            })
-            st.success("✅ Deuda comercial agregada correctamente.")
-            st.rerun()
-
-        if "deudas_comerciales" in st.session_state and st.session_state.deudas_comerciales:
-            df_com = pd.DataFrame(st.session_state.deudas_comerciales)
-            df_com["Total"] = df_com["Monto"]
-            st.dataframe(df_com)
-
-            cols_com = st.columns(4)
-            for i, fila in enumerate(st.session_state.deudas_comerciales):
-                col = cols_com[i % 4]
-                with col:
-                    if st.button(f"❌ Eliminar Deuda Comercial #{i+1}", key=f"delete_com_{i}"):
-                        st.session_state.deudas_comerciales.pop(i)
-                        st.rerun()
-        else:
-            df_com = pd.DataFrame([{ "A favor de": "", "Tipo de Moneda": "ARS", "Monto": 0.0, "Garantía": "", "Tasa": 0.0, "Plazo (días)": 0 }])
-
-    
-    # ========================
-    # DATAFRAMES desde session_state (sin modificar nada)
-    # ========================
-    
-    bancos_df = pd.DataFrame(st.session_state.bancos) if "bancos" in st.session_state else pd.DataFrame()
-    
-    # === BLOQUE RESUMEN DEUDA MERCADO DE CAPITALES ===
-    mercado_df = pd.DataFrame(st.session_state.mercado) if "mercado" in st.session_state else pd.DataFrame()
-    total_mercado_ars = 0
-    total_mercado_usd = 0
-    tasa_ponderada_ars_mercado = 0
-    tasa_ponderada_usd_mercado = 0
-
-    if not mercado_df.empty:
-        columnas_montos = ["Obligaciones Negociables", "Descuento de Cheques Propios", "Pagaré Bursátil", "Organismos Multilaterales (CFI)", "Otros (1)", "Otros (2)"]
-        columnas_presentes = [col for col in columnas_montos if col in mercado_df.columns]
-        mercado_df["Total"] = mercado_df[columnas_presentes].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
-
-        ars = mercado_df[mercado_df["Tipo de Moneda"] == "ARS"]
-        total_mercado_ars = ars["Total"].sum()
-        if total_mercado_ars > 0 and "Tasa Promedio $" in ars.columns:
-            tasas = ars["Tasa Promedio $"].fillna(0)
-            montos = ars["Total"]
-            tasa_ponderada_ars_mercado = (tasas * montos).sum() / total_mercado_ars
-
-        usd = mercado_df[mercado_df["Tipo de Moneda"] == "USD"]
-        total_mercado_usd = usd["Total"].sum()
-        if total_mercado_usd > 0 and "Tasa Promedio USD" in usd.columns:
-            tasas = usd["Tasa Promedio USD"].fillna(0)
-            montos = usd["Total"]
-            tasa_ponderada_usd_mercado = (tasas * montos).sum() / total_mercado_usd
-
-    
-    deudas_com_df = pd.DataFrame(st.session_state.deudas_comerciales) if "deudas_comerciales" in st.session_state else pd.DataFrame()
-    
-    # ========================
-    # ENRIQUECER bancos_df CON "Total por Banco" SOLO PARA CÁLCULOS
-    # ========================
-    if not bancos_df.empty:
-        bancos_df["Total por Banco"] = (
-            bancos_df.get("Saldo Préstamos Amortizables", 0).fillna(0) +
-            bancos_df.get("Valor de la Cuota", 0).fillna(0) * bancos_df.get("Cantidad Cuotas Faltantes", 0).fillna(0) +
-            bancos_df.get("Descuento de Cheques Utilizado", 0).fillna(0) +
-            bancos_df.get("Adelanto en Cta Cte Utilizado", 0).fillna(0) +
-            bancos_df.get("Avales SGR", 0).fillna(0) +
-            bancos_df.get("Tarjeta de Crédito Utilizado", 0).fillna(0) +
-            bancos_df.get("Leasing Utilizado", 0).fillna(0) +
-            bancos_df.get("Impo/Expo Utilizado", 0).fillna(0)
+    # ============ BLOQUE DEUDA BANCARIA ============
+    with st.expander(" **Deuda Bancaria y Financieras**"):
+        bancos_df = st.session_state.bancos.copy()
+        bancos_editado = st.data_editor(
+            bancos_df,
+            key="editor_bancos",
+            num_rows="dynamic",
+            column_config={
+                "Garantía (*)": st.column_config.SelectboxColumn("Garantía (*)", options=opciones_garantia),
+                "Régimen de Amortización (**)": st.column_config.SelectboxColumn("Régimen de Amortización (**)", options=opciones_regimen),
+                "Tipo de Moneda": st.column_config.SelectboxColumn("Tipo de Moneda", options=monedas)
+            },
+            use_container_width=True
         )
-    
-    if not mercado_df.empty and "Total" not in mercado_df.columns:
-        valor_nominal = mercado_df.get("Valor Nominal", pd.Series([0]*len(mercado_df), index=mercado_df.index)).fillna(0)
-        monto = mercado_df.get("Monto", pd.Series([0]*len(mercado_df), index=mercado_df.index)).fillna(0)
-        mercado_df["Total"] = valor_nominal + monto
+        if st.button("Guardar Deuda Bancaria", key="guardar_bancos_btn"):
+            st.session_state.bancos = bancos_editado
+            st.success("✅ Deuda bancaria actualizada.")
 
-    # ========================
-    # RESUMEN GENERAL DE DEUDA
-    # ========================
-    with st.expander("**Resumen General de la Deuda Cargada**"):
-
-        # === BLOQUE BANCOS ===
-        try:
-            if not bancos_df.empty:
-                bancos_ars = bancos_df[bancos_df["Tipo de Moneda"] == "ARS"]
-                bancos_usd = bancos_df[bancos_df["Tipo de Moneda"] == "USD"]
-
-                total_bancos_ars = bancos_ars["Total por Banco"].sum()
-                total_bancos_usd = bancos_usd["Total por Banco"].sum()
-
-                tasa_bancos_ars = (
-                    (bancos_ars["Total por Banco"] * bancos_ars["Tasa Promedio $"]).sum() / total_bancos_ars
-                    if total_bancos_ars > 0 else 0
-                )
-                tasa_bancos_usd = (
-                    (bancos_usd["Total por Banco"] * bancos_usd["Tasa Promedio USD"]).sum() / total_bancos_usd
-                    if total_bancos_usd > 0 else 0
-                )
-            else:
-                total_bancos_ars = total_bancos_usd = 0
-                tasa_bancos_ars = tasa_bancos_usd = 0
-        except Exception:
-            total_bancos_ars = total_bancos_usd = 0
-            tasa_bancos_ars = tasa_bancos_usd = 0
-
-        # === BLOQUE MERCADO ===
-        try:
-            if not mercado_df.empty:
-                columnas_valores = [
-                    "Obligaciones Negociables", "Descuento de Cheques Propios",
-                    "Pagaré Bursátil", "Organismos Multilaterales (CFI)"
-                ]
-
-                # Asegurar que las columnas están y convertirlas a numérico
-                mercado_df[columnas_valores] = mercado_df[columnas_valores].apply(pd.to_numeric, errors="coerce").fillna(0)
-
-                # Calcular total por fila
-                mercado_df["Total"] = mercado_df[columnas_valores].sum(axis=1)
-
-                # Separar por moneda
-                mercado_ars = mercado_df[mercado_df["Tipo de Moneda"] == "ARS"]
-                mercado_usd = mercado_df[mercado_df["Tipo de Moneda"] == "USD"]
-
-                # Totales
-                total_mercado_ars = mercado_ars["Total"].sum()
-                total_mercado_usd = mercado_usd["Total"].sum()
-
-                # Tasa ponderada
-                tasa_mercado_ars = (
-                    (mercado_ars["Total"] * mercado_ars["Tasa Promedio $"]).sum() / total_mercado_ars
-                    if total_mercado_ars > 0 else 0
-                )
-                tasa_mercado_usd = (
-                    (mercado_usd["Total"] * mercado_usd["Tasa Promedio USD"]).sum() / total_mercado_usd
-                    if total_mercado_usd > 0 else 0
-                )
-            else:
-                total_mercado_ars = total_mercado_usd = 0
-                tasa_mercado_ars = tasa_mercado_usd = 0
-        except Exception as e:
-            st.error(f"Error en bloque Mercado: {e}")
-            total_mercado_ars = total_mercado_usd = 0
-            tasa_mercado_ars = tasa_mercado_usd = 0
-
-        # === BLOQUE COMERCIAL ===
-        try:
-            if not deudas_com_df.empty:
-                comercial_ars = deudas_com_df[deudas_com_df["Tipo de Moneda"] == "ARS"]
-                comercial_usd = deudas_com_df[deudas_com_df["Tipo de Moneda"] == "USD"]
-
-                total_comercial_ars = comercial_ars["Monto"].sum()
-                total_comercial_usd = comercial_usd["Monto"].sum()
-
-                tasa_comercial_ars = (
-                    (comercial_ars["Monto"] * comercial_ars["Tasa"]).sum() / total_comercial_ars
-                    if total_comercial_ars > 0 else 0
-                )
-                tasa_comercial_usd = (
-                    (comercial_usd["Monto"] * comercial_usd["Tasa"]).sum() / total_comercial_usd
-                    if total_comercial_usd > 0 else 0
-                )
-            else:
-                total_comercial_ars = total_comercial_usd = 0
-                tasa_comercial_ars = tasa_comercial_usd = 0
-        except Exception:
-            total_comercial_ars = total_comercial_usd = 0
-            tasa_comercial_ars = tasa_comercial_usd = 0
-
-        # === TOTAL GENERAL POR MONEDA ===
-        total_general_ars = total_bancos_ars + total_mercado_ars + total_comercial_ars
-        total_general_usd = total_bancos_usd + total_mercado_usd + total_comercial_usd
-        total_general = total_general_ars + total_general_usd
-
-        # === TASA PROMEDIO GENERAL PONDERADA ===
-        suma_tasa_general_ars = (
-            tasa_bancos_ars * total_bancos_ars +
-            tasa_mercado_ars * total_mercado_ars +
-            tasa_comercial_ars * total_comercial_ars
+    # ============ BLOQUE DEUDA MERCADO ============
+    with st.expander(" **Deuda Mercado de Capitales**"):
+        mercado_df = st.session_state.mercado.copy()
+        mercado_editado = st.data_editor(
+            mercado_df,
+            key="editor_mercado",
+            num_rows="dynamic",
+            column_config={
+                "Tipo de Moneda": st.column_config.SelectboxColumn("Tipo de Moneda", options=monedas)
+            },
+            use_container_width=True
         )
-        suma_tasa_general_usd = (
-            tasa_bancos_usd * total_bancos_usd +
-            tasa_mercado_usd * total_mercado_usd +
-            tasa_comercial_usd * total_comercial_usd
-        )
+        if st.button("Guardar Deuda Mercado", key="guardar_mercado_btn"):
+            st.session_state.mercado = mercado_editado
+            st.success("✅ Deuda del mercado actualizada.")
 
-        tasa_general_ars = suma_tasa_general_ars / total_general_ars if total_general_ars > 0 else 0
-        tasa_general_usd = suma_tasa_general_usd / total_general_usd if total_general_usd > 0 else 0
-
-        # === TARJETA VISUAL ===
-        st.markdown(
-            f"""
-            <div style="
-                border: 2px solid #4CAF50;
-                border-radius: 12px;
-                padding: 30px;
-                background-color: #f9f9f9;
-                display: flex;
-                justify-content: space-around;
-                flex-wrap: wrap;
-            ">
-                <div style="flex: 1; margin: 20px; min-width: 240px;">
-                    <h3 style="color:#4CAF50;"><b>Deuda Bancaria</b></h3>
-                    <p><b>Total ARS:</b> ${total_bancos_ars:,.2f}</p>
-                    <p><b>Total USD:</b> U$D {total_bancos_usd:,.2f}</p>
-                    <p><b>Tasa Promedio ARS:</b> {tasa_bancos_ars:.2f} %</p>
-                    <p><b>Tasa Promedio USD:</b> {tasa_bancos_usd:.2f} %</p>
-                </div>
-                <div style="flex: 1; margin: 20px; min-width: 240px;">
-                    <h3 style="color:#2196F3;"><b>Mercado Capitales</b></h3>
-                    <p><b>Total ARS:</b> ${total_mercado_ars:,.2f}</p>
-                    <p><b>Total USD:</b> U$D {total_mercado_usd:,.2f}</p>
-                    <p><b>Tasa Promedio ARS:</b> {tasa_mercado_ars:.2f} %</p>
-                    <p><b>Tasa Promedio USD:</b> {tasa_mercado_usd:.2f} %</p>
-                </div>
-                <div style="flex: 1; margin: 20px; min-width: 240px;">
-                    <h3 style="color:#9C27B0;"><b>Deuda Comercial</b></h3>
-                    <p><b>Total ARS:</b> ${total_comercial_ars:,.2f}</p>
-                    <p><b>Total USD:</b> U$D {total_comercial_usd:,.2f}</p>
-                    <p><b>Tasa Promedio ARS:</b> {tasa_comercial_ars:.2f} %</p>
-                    <p><b>Tasa Promedio USD:</b> {tasa_comercial_usd:.2f} %</p>
-                </div>
-                <div style="flex: 1; margin: 20px; min-width: 240px;">
-                    <h3 style="color:#FF9800;"><b>Total General</b></h3>
-                    <p><b>Total ARS:</b> ${total_general_ars:,.2f}</p>
-                    <p><b>Total USD:</b> U$D {total_general_usd:,.2f}</p>
-                    <p><b>Tasa Promedio ARS:</b> {tasa_general_ars:.2f} %</p>
-                    <p><b>Tasa Promedio USD:</b> {tasa_general_usd:.2f} %</p>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
+    # ============ BLOQUE DEUDA COMERCIAL ============
+    with st.expander(" **Deuda Comercial**"):
+        comercial_df = st.session_state.deudas_comerciales.copy()
+        comercial_editado = st.data_editor(
+            comercial_df,
+            key="editor_comercial",
+            num_rows="dynamic",
+            column_config={
+                "Tipo de Moneda": st.column_config.SelectboxColumn("Tipo de Moneda", options=monedas)
+            },
+            use_container_width=True
         )
+        if st.button("Guardar Deuda Comercial", key="guardar_comercial_btn"):
+            st.session_state.deudas_comerciales = comercial_editado
+            st.success("✅ Deuda comercial actualizada.")
+
+
 
 with tabs[2]:
-
-    # Sanear listas si ya fueron definidas
-    for key in ["ventas_interno", "ventas_externo", "compras"]:
-        if key in st.session_state:
-            # Eliminar meses repetidos por error (por ejemplo, dos "Enero")
-            meses_vistos = set()
-            sin_duplicados = []
-            for fila in st.session_state[key]:
-                mes = fila.get("Mes")
-                if mes not in meses_vistos:
-                    sin_duplicados.append(fila)
-                    meses_vistos.add(mes)
-            st.session_state[key] = sin_duplicados
-
-
-    # === Opciones ===
+    # === CONFIGURACIONES INICIALES ===
     opciones_tipo = ["COMPLETAR", "AGROPECUARIO", "INDUSTRIA", "COMERCIO", "SERVICIOS", "CONSTRUCCION"]
-    subcategorias_agro = ["AGRICULTURA", "GANADERIA", "TAMBO", "OTROS"]
-
+    subcategorias_agro = ["COMPLETAR", "AGRICULTURA", "GANADERIA", "TAMBO", "OTROS"]
     meses_largos = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-                "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+                    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 
-    # === Estado inicial ===
+    # Inicialización si no existen
     for key in ["ventas_interno", "ventas_externo", "compras"]:
         if key not in st.session_state:
-            st.session_state[key] = [
-                {
+            filas_iniciales = []
+            for mes in meses_largos:
+                fila = {
                     "Mes": mes,
                     "Tipo": "COMPLETAR",
-                    "Subtipos": [],
-                    "Valores": {},
-                    "Año en curso": 0,
-                    "Año 1": 0,
-                    "Año 2": 0,
-                    "Año 3": 0,
-                    "Región": "" if key == "ventas_externo" else None
-                } for mes in meses_largos
-            ]
+                    "Subtipo": "COMPLETAR",
+                    "Año en curso": 0.0,
+                    "Año 1": 0.0,
+                    "Año 2": 0.0,
+                    "Año 3": 0.0
+                }
+                if key == "ventas_externo":
+                    fila["Región"] = ""
+                filas_iniciales.append(fila)
+            st.session_state[key] = pd.DataFrame(filas_iniciales)
 
-    # === BLOQUE 1 ===
-    with st.expander("**Ventas - Mercado Interno (Netas de IVA)**"):
-        interno_rows = []
+    def agregar_fila(df_name, mes_seleccionado):
+        df = st.session_state[df_name]
+        nueva_fila = {
+            "Mes": mes_seleccionado,
+            "Tipo": "COMPLETAR",
+            "Subtipo": "COMPLETAR",
+            "Año en curso": 0.0,
+            "Año 1": 0.0,
+            "Año 2": 0.0,
+            "Año 3": 0.0,
+        }
+        if df_name == "ventas_externo":
+            nueva_fila["Región"] = ""
 
-        for i, fila in enumerate(st.session_state.ventas_interno):
-            col1, col2 = st.columns([1, 5])
-            col1.write(f"**{fila['Mes']}**")
+        idxs = df.index[df["Mes"] == mes_seleccionado].tolist()
+        insertar_idx = idxs[-1] + 1 if idxs else len(df)
 
-            # Selectbox clásico de Tipo
-            fila["Tipo"] = col2.selectbox("Tipo", opciones_tipo,
-                                        index=opciones_tipo.index(fila["Tipo"]),
-                                        key=f"int_tipo_{i}")
+        nuevo_df = pd.concat([
+            df.iloc[:insertar_idx],
+            pd.DataFrame([nueva_fila]),
+            df.iloc[insertar_idx:]
+        ]).reset_index(drop=True)
 
-            if fila["Tipo"] == "AGROPECUARIO":
-                # Mostrar cada subtipo como una fila horizontal con los valores a completar
-                for j, subtipo in enumerate(subcategorias_agro):
-                    row = st.columns([1.2, 0.9, 0.9, 0.9, 0.9])
-                    row[0].markdown(f"{subtipo}")
-                    fila[f"Año en curso {subtipo}"] = row[1].number_input("Año en curso", value=fila.get(f"Año en curso {subtipo}", 0), key=f"int_curso_{i}_{j}")
-                    fila[f"Año 1 {subtipo}"] = row[2].number_input("Año 1", value=fila.get(f"Año 1 {subtipo}", 0), key=f"int_1_{i}_{j}")
-                    fila[f"Año 2 {subtipo}"] = row[3].number_input("Año 2", value=fila.get(f"Año 2 {subtipo}", 0), key=f"int_2_{i}_{j}")
-                    fila[f"Año 3 {subtipo}"] = row[4].number_input("Año 3", value=fila.get(f"Año 3 {subtipo}", 0), key=f"int_3_{i}_{j}")
-            else:
-                # Si no es agropecuario, seguimos con tu lógica original
-                col3, col4, col5, col6 = st.columns([0.9, 0.9, 0.9, 0.9])
-                fila["Año en curso"] = col3.number_input("Año en curso", value=fila["Año en curso"], key=f"int_curso_{i}")
-                fila["Año 1"] = col4.number_input("Año 1", value=fila["Año 1"], key=f"int_1_{i}")
-                fila["Año 2"] = col5.number_input("Año 2", value=fila["Año 2"], key=f"int_2_{i}")
-                fila["Año 3"] = col6.number_input("Año 3", value=fila["Año 3"], key=f"int_3_{i}")
+        st.session_state[df_name] = nuevo_df
 
-            st.markdown("<div style='height:1px; background-color:#e0e0e0; margin:8px 0;'></div>", unsafe_allow_html=True)
-            fila_copia = fila.copy()
-            interno_rows.append(fila_copia)
+    def mostrar_bloque_data_editor(nombre_bloque, df_name, incluir_region=False):
+        st.markdown(f"#### {nombre_bloque}")
+        df = st.session_state[df_name].copy()
 
-        # Crear df_interno para exportar (si es necesario)
-        df_interno = pd.DataFrame(interno_rows)
+        columnas_editor = {
+            "Mes": st.column_config.SelectboxColumn("Mes", options=meses_largos),
+            "Tipo": st.column_config.SelectboxColumn("Tipo", options=opciones_tipo),
+            "Subtipo": st.column_config.SelectboxColumn("Subtipo", options=subcategorias_agro),
+            "Año en curso": st.column_config.NumberColumn("Año en curso", step=100.0, format="%.3f"),
+            "Año 1": st.column_config.NumberColumn("Año 1", step=100.0, format="%.3f"),
+            "Año 2": st.column_config.NumberColumn("Año 2", step=100.0, format="%.3f"),
+            "Año 3": st.column_config.NumberColumn("Año 3", step=100.0, format="%.3f"),
+        }
+        if incluir_region:
+            columnas_editor["Región"] = st.column_config.TextColumn("Región")
 
-        st.success(f"**Total Interno:** "
-            f"Año en curso: ${df_interno.get('Año en curso', pd.Series(dtype=float)).sum():,.2f}  | "
-            f"Año 1: ${df_interno.get('Año 1', pd.Series(dtype=float)).sum():,.2f}  |  "
-            f"Año 2: ${df_interno.get('Año 2', pd.Series(dtype=float)).sum():,.2f}  |  "
-            f"Año 3: ${df_interno.get('Año 3', pd.Series(dtype=float)).sum():,.2f}")
+        df_editado = st.data_editor(
+            df,
+            key=f"editor_{df_name}",
+            use_container_width=True,
+            num_rows="dynamic",
+            column_config=columnas_editor,
+            hide_index=True
+        )
 
-    # === BLOQUE 2 ===
-    with st.expander("**Ventas Mercado Externo (Netas de IVA)**"):
-        externo_rows = []
-        for i, fila in enumerate(st.session_state.ventas_externo):
-            col1, col2 = st.columns([1, 5])
-            col1.write(f"**{fila['Mes']}**")
+        if st.button(f"💾 Guardar cambios en {nombre_bloque}", key=f"guardar_{df_name}"):
+            st.session_state[df_name] = df_editado
+            st.success("✅ Cambios guardados.")
 
-            fila["Tipo"] = col2.selectbox("Tipo", opciones_tipo,
-                                        index=opciones_tipo.index(fila["Tipo"]),
-                                        key=f"ext_tipo_{i}")
+        if not st.session_state[df_name].empty:
+            resumen = st.session_state[df_name].groupby("Tipo")[["Año en curso", "Año 1", "Año 2", "Año 3"]].sum()
+            st.markdown("##### Resumen por tipo")
+            st.dataframe(resumen.style.format("${:,.3f}"))
+        else:
+            st.info("Todavía no hay datos cargados.")
 
-            if fila["Tipo"] == "AGROPECUARIO":
-                for j, subt in enumerate(subcategorias_agro):
-                    fila.setdefault(f"Año en curso {subt}", 0)
-                    fila.setdefault(f"Año 1 {subt}", 0)
-                    fila.setdefault(f"Año 2 {subt}", 0)
-                    fila.setdefault(f"Año 3 {subt}", 0)
-                    fila.setdefault(f"Región {subt}", "")
+    with st.expander("**Ventas Mercado Interno (Netas de IVA)**", expanded=False):
+        mostrar_bloque_data_editor("Ventas - Mercado Interno (Netas de IVA)", "ventas_interno")
 
-                    col_sub = st.columns([1.3, 0.9, 0.9, 0.9, 0.9, 1.2])
-                    col_sub[0].markdown(f"{subt}")
-                    fila[f"Año en curso {subt}"] = col_sub[1].number_input("Año en curso", value=fila[f"Año en curso {subt}"], key=f"ext_curso_{i}_{j}")
-                    fila[f"Año 1 {subt}"] = col_sub[2].number_input("Año 1", value=fila[f"Año 1 {subt}"], key=f"ext_1_{i}_{j}")
-                    fila[f"Año 2 {subt}"] = col_sub[3].number_input("Año 2", value=fila[f"Año 2 {subt}"], key=f"ext_2_{i}_{j}")
-                    fila[f"Año 3 {subt}"] = col_sub[4].number_input("Año 3", value=fila[f"Año 3 {subt}"], key=f"ext_3_{i}_{j}")
-                    fila[f"Región {subt}"] = col_sub[5].text_input("Región", value=fila[f"Región {subt}"], key=f"ext_region_{i}_{j}")
-            else:
-                col3, col4, col5, col6, col7 = st.columns([0.8, 0.8, 0.8, 0.8, 1])
-                fila["Año en curso"] = col3.number_input("Año en curso", value=fila["Año en curso"], key=f"ext_curso_{i}")
-                fila["Año 1"] = col4.number_input("Año 1", value=fila["Año 1"], key=f"ext_1_{i}")
-                fila["Año 2"] = col5.number_input("Año 2", value=fila["Año 2"], key=f"ext_2_{i}")
-                fila["Año 3"] = col6.number_input("Año 3", value=fila["Año 3"], key=f"ext_3_{i}")
-                fila["Región"] = col7.text_input("Región", fila["Región"], key=f"ext_region_{i}")
+    with st.expander("**Ventas Mercado Externo (Netas de IVA)**", expanded=False):
+        mostrar_bloque_data_editor("Ventas - Mercado Externo (Netas de IVA)", "ventas_externo", incluir_region=True)
 
-            st.markdown("<div style='height:1px; background-color:#e0e0e0; margin:8px 0;'></div>", unsafe_allow_html=True)
-            externo_rows.append(fila)
+    with st.expander("**Compras (Netas de IVA)**", expanded=False):
+        mostrar_bloque_data_editor("Compras Mensuales (Netas de IVA)", "compras")
 
-        df_externo = pd.DataFrame(externo_rows)
-        st.success(f"**TOTAL Externo:** "
-                f"Año en curso: ${df_externo.filter(like='Año en curso').sum(axis=1).sum():,.2f} | "
-                f"Año 1: ${df_externo.filter(like='Año 1').sum(axis=1).sum():,.2f} | "
-                f"Año 2: ${df_externo.filter(like='Año 2').sum(axis=1).sum():,.2f} | "
-                f"Año 3: ${df_externo.filter(like='Año 3').sum(axis=1).sum():,.2f}")
+   # === PLAN DE VENTAS POR ACTIVIDAD ===
+    PRODUCTOS_AGRICULTURA = ["Trigo", "Maíz", "Soja", "Girasol"]
+    CATEGORIAS_GANADERIA = ["Novillos", "Vaquillonas", "Terneros", "Vacas"]
 
-    # === BLOQUE 3 ===
-    with st.expander("**Compras Mensuales (Netas de IVA)**"):
-        compras_rows = []
-        for i, fila in enumerate(st.session_state.compras):
-            col1, col2 = st.columns([1, 5])
-            col1.write(f"**{fila['Mes']}**")
+    def crear_df_ventas(meses, columnas):
+        data = {"Mes": meses}
+        for col in columnas:
+            data[col] = [0.0] * len(meses)
+        return pd.DataFrame(data)
 
-            fila["Tipo"] = col2.selectbox("Tipo", opciones_tipo,
-                                        index=opciones_tipo.index(fila["Tipo"]),
-                                        key=f"comp_tipo_{i}")
-
-            if fila["Tipo"] == "AGROPECUARIO":
-                for j, subt in enumerate(subcategorias_agro):
-                    fila.setdefault(f"Año en curso {subt}", 0)
-                    fila.setdefault(f"Año 1 {subt}", 0)
-                    fila.setdefault(f"Año 2 {subt}", 0)
-                    fila.setdefault(f"Año 3 {subt}", 0)
-
-                    col_sub = st.columns([1.3, 0.9, 0.9, 0.9, 0.9])
-                    col_sub[0].markdown(f"{subt}")
-                    fila[f"Año en curso {subt}"] = col_sub[1].number_input("Año en curso", value=fila[f"Año en curso {subt}"], key=f"comp_curso_{i}_{j}")
-                    fila[f"Año 1 {subt}"] = col_sub[2].number_input("Año 1", value=fila[f"Año 1 {subt}"], key=f"comp_1_{i}_{j}")
-                    fila[f"Año 2 {subt}"] = col_sub[3].number_input("Año 2", value=fila[f"Año 2 {subt}"], key=f"comp_2_{i}_{j}")
-                    fila[f"Año 3 {subt}"] = col_sub[4].number_input("Año 3", value=fila[f"Año 3 {subt}"], key=f"comp_3_{i}_{j}")
-            else:
-                col3, col4, col5, col6 = st.columns([0.9, 0.9, 0.9, 0.9])
-                fila["Año en curso"] = col3.number_input("Año en curso", value=fila["Año en curso"], key=f"comp_curso_{i}")
-                fila["Año 1"] = col4.number_input("Año 1", value=fila["Año 1"], key=f"comp_1_{i}")
-                fila["Año 2"] = col5.number_input("Año 2", value=fila["Año 2"], key=f"comp_2_{i}")
-                fila["Año 3"] = col6.number_input("Año 3", value=fila["Año 3"], key=f"comp_3_{i}")
-
-            st.markdown("<div style='height:1px; background-color:#e0e0e0; margin:8px 0;'></div>", unsafe_allow_html=True)
-            compras_rows.append(fila)
-
-        df_compras = pd.DataFrame(compras_rows)
-        st.success(f"**TOTAL Compras:** "
-                    f"Año en curso: ${df_compras.filter(like='Año en curso').sum(axis=1).sum():,.2f} | "
-                    f"Año 1: ${df_compras.filter(like='Año 1').sum(axis=1).sum():,.2f} | "
-                    f"Año 2: ${df_compras.filter(like='Año 2').sum(axis=1).sum():,.2f} | "
-                    f"Año 3: ${df_compras.filter(like='Año 3').sum(axis=1).sum():,.2f}")
-        
-    
-
-    # === BLOQUE 4 ===
-    # Función para convertir a DataFrame
-    def convertir_plan(plan_dict, tipo):
-        filas = []
-        for rubro, meses in plan_dict.items():
-            for mes, valor in meses.items():
-                filas.append({
-                    "Tipo": tipo,
-                    "Producto o Categoría": rubro,
-                    "Mes": mes,
-                    "Valor": valor
-                })
-        return pd.DataFrame(filas)
-
-    
     if "planes_guardados_por_actividad" not in st.session_state:
         st.session_state.planes_guardados_por_actividad = {}
 
-    with st.expander("**Plan de Ventas y Detalles**"):
-        st.subheader("Seleccionar actividades productivas")
-        actividades_seleccionadas = st.multiselect(
-            "**¿Qué actividades realiza?**",
+    with st.expander("**Plan de Ventas por Actividad**", expanded=False):
+        st.markdown("##### Seleccioná las actividades que realizás:")
+        actividades = st.multiselect(
+            "Actividades productivas",
             ["Agricultura", "Ganadería", "Tambo", "Otros"],
-            default=["Agricultura", "Ganadería"]
+            default=["Agricultura"]
         )
 
-        respuestas = st.session_state.get("respuestas", {})  # ✅ no se borra nada
-
-        st.markdown("**Con quién comercializa sus productos habitualmente**")
+        st.markdown("#### Comercialización y proveedores")
         comercializa = {}
-        cols_com = st.columns(len(actividades_seleccionadas))
-        for i, act in enumerate(actividades_seleccionadas):
-            comercializa[act] = cols_com[i].text_input(f"{act}", key=f"com_{act.lower()}")
-
-        st.markdown("**Principales Proveedores**")
         proveedores = {}
-        cols_prov = st.columns(len(actividades_seleccionadas))
-        for i, act in enumerate(actividades_seleccionadas):
-            proveedores[act] = cols_prov[i].text_input(f"{act}", key=f"prov_{act.lower()}")
+        cols_com, cols_prov = st.columns(2)
 
-        meses_abrev = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"]
-        # Inicializar variables para evitar NameError
-        plan_agricultura, plan_ganaderia, plan_tambo, plan_otros = {}, {}, {}, {}
-        # === Agricultura ===
-        if "Agricultura" in actividades_seleccionadas:
-            with st.form("form_agricultura"):
-                st.markdown("##### Plan de Ventas en Agricultura (Tn/mes)")
-                plan_agricultura = {}
-                productos = ["Trigo", "Maíz", "Soja", "Girasol"]
-                for producto in productos:
-                    st.markdown(f"**{producto}**")
-                    rows = []
-                    cols = st.columns(6)
-                    for i in range(6):
-                        mes = meses_abrev[i]
-                        valor = cols[i].number_input(f"{mes}", key=f"agro1_{producto}_{mes}", value=0)
-                        rows.append((mes, valor))
-                    cols = st.columns(6)
-                    for i in range(6, 12):
-                        mes = meses_abrev[i]
-                        valor = cols[i - 6].number_input(f"{mes}", key=f"agro2_{producto}_{mes}", value=0)
-                        rows.append((mes, valor))
-                    plan_agricultura[producto] = dict(rows)
-                if st.form_submit_button("Guardar Plan Agricultura"):
-                    respuestas["Plan Agricultura"] = plan_agricultura
-                    df_agro = convertir_plan(plan_agricultura, "Agricultura")
-                    st.session_state.planes_guardados_por_actividad["Agricultura"] = df_agro
-                    st.success("✅ Plan de Agricultura actualizado.")
+        for act in actividades:
+            comercializa[act] = cols_com.text_input(f"¿Con quién comercializa en {act}?", key=f"com_{act}")
+            proveedores[act] = cols_prov.text_input(f"Principales proveedores en {act}", key=f"prov_{act}")
 
-        # === Ganadería ===
-        if "Ganadería" in actividades_seleccionadas:
-            with st.form("form_ganaderia"):
-                st.markdown("##### Plan de Ventas de Ganadería (Cab/mes)")
-                plan_ganaderia = {}
-                categorias = ["Novillos", "Vaquillonas", "Terneros", "Vacas"]
-                for categoria in categorias:
-                    st.markdown(f"**{categoria}**")
-                    rows = []
-                    cols = st.columns(6)
-                    for i in range(6):
-                        mes = meses_abrev[i]
-                        valor = cols[i].number_input(f"{mes}", key=f"gana1_{categoria}_{mes}", value=0)
-                        rows.append((mes, valor))
-                    cols = st.columns(6)
-                    for i in range(6, 12):
-                        mes = meses_abrev[i]
-                        valor = cols[i - 6].number_input(f"{mes}", key=f"gana2_{categoria}_{mes}", value=0)
-                        rows.append((mes, valor))
-                    plan_ganaderia[categoria] = dict(rows)
-                if st.form_submit_button("Guardar Plan Ganadería"):
-                    respuestas["Plan Ganaderia"] = plan_ganaderia
-                    df_gana = convertir_plan(plan_ganaderia, "Ganadería")
-                    st.session_state.planes_guardados_por_actividad["Ganadería"] = df_gana
-                    st.success("✅ Plan de Ganadería actualizado.")
-
-        # === Tambo ===
-        if "Tambo" in actividades_seleccionadas:
-            with st.form("form_tambo"):
-                st.markdown("##### Plan de Ventas Tambo (Kg GB/mes)")
-                plan_tambo = {}
-                cols = st.columns(6)
-                for i in range(6):
-                    mes = meses_abrev[i]
-                    plan_tambo[mes] = cols[i].number_input(f"{mes}", key=f"tambo1_{mes}", value=0)
-                cols = st.columns(6)
-                for i in range(6, 12):
-                    mes = meses_abrev[i]
-                    plan_tambo[mes] = cols[i - 6].number_input(f"{mes}", key=f"tambo2_{mes}", value=0)
-                if st.form_submit_button("Guardar Plan Tambo"):
-                    respuestas["Plan Tambo"] = plan_tambo
-                    df_tambo = convertir_plan({"Tambo": plan_tambo}, "Tambo")
-                    st.session_state.planes_guardados_por_actividad["Tambo"] = df_tambo
-                    st.success("✅ Plan de Tambo actualizado.")
-
-        # === Otros ===
-        if "Otros" in actividades_seleccionadas:
-            with st.form("form_otros"):
-                st.markdown("### Plan de Ventas Otros (detalle mensual)")
-                plan_otros = {}
-                nombre_otros = st.text_input("Nombre actividad", key="otros_nombre")
-                if nombre_otros:
-                    rows = []
-                    cols = st.columns(6)
-                    for i in range(6):
-                        mes = meses_abrev[i]
-                        valor = cols[i].number_input(f"{mes}", key=f"otros1_{mes}", value=0)
-                        rows.append((mes, valor))
-                    cols = st.columns(6)
-                    for i in range(6, 12):
-                        mes = meses_abrev[i]
-                        valor = cols[i - 6].number_input(f"{mes}", key=f"otros2_{mes}", value=0)
-                        rows.append((mes, valor))
-                    plan_otros[nombre_otros] = dict(rows)
-                if st.form_submit_button("Guardar Plan Otros"):
-                    respuestas["Plan Otros"] = plan_otros
-                    df_otros = convertir_plan(plan_otros, "Otros")
-                    st.session_state.planes_guardados_por_actividad["Otros"] = df_otros
-                    st.success("✅ Plan de Otros actualizado.")
-
-        # === Guardar los datos en respuestas de forma segura ===
-        st.session_state.respuestas["Plan Agricultura"] = plan_agricultura
-        st.session_state.respuestas["Plan Ganaderia"] = plan_ganaderia
-        st.session_state.respuestas["Plan Tambo"] = plan_tambo
-        st.session_state.respuestas["Plan Otros"] = plan_otros
-        st.session_state.respuestas["Comercializa"] = comercializa
-        st.session_state.respuestas["Proveedores"] = proveedores
-        
-        # ✅ Guardar de nuevo en session_state
-        #st.session_state.respuestas = respuestas
-
-        # === Mostrar el plan actualizado
-        if st.session_state.planes_guardados_por_actividad:
-            st.success("Vista previa del Plan de Ventas")
-            df_plan_general = pd.concat(st.session_state.planes_guardados_por_actividad.values(), ignore_index=True)
-            st.dataframe(df_plan_general)
-        else:
-            st.info("Todavía no se han guardado planes.")
-
-        # --- Conversión a DataFrame al final ---
-        dfs_planes = []
-
-        if "Plan Agricultura" in respuestas and respuestas["Plan Agricultura"]:
-            df_agro = convertir_plan(respuestas["Plan Agricultura"], "Agricultura")
-            dfs_planes.append(df_agro)
-
-        if "Plan Ganaderia" in respuestas and respuestas["Plan Ganaderia"]:
-            df_gana = convertir_plan(respuestas["Plan Ganaderia"], "Ganadería")
-            dfs_planes.append(df_gana)
-
-        if "Plan Tambo" in respuestas and respuestas["Plan Tambo"]:
-            df_tambo = convertir_plan({"Tambo": respuestas["Plan Tambo"]}, "Tambo")
-            dfs_planes.append(df_tambo)
-
-        if "Plan Otros" in respuestas and respuestas["Plan Otros"]:
-            df_otros = convertir_plan(respuestas["Plan Otros"], "Otros")
-            dfs_planes.append(df_otros)
-
-        
-    ## --------- RESUMEN DEL TAB DE VENTAS Y COMPRAS ---------------
-    with st.expander("**Resumen anual de Ventas, Compras y Resultado**"):
-        def sumar_agro(row, año, subtipos):
-            return sum(row.get(f"{año} {sub}", 0) for sub in subtipos)
-
-        def totalizar(dataset, subtipos, origen):
-            rows = []
-            for fila in dataset:
-                tipo = fila.get("Tipo", "SIN TIPO")
-                if tipo == "AGROPECUARIO":
-                    for año in ["Año en curso", "Año 1", "Año 2", "Año 3"]:
-                        valor = sumar_agro(fila, año, subtipos)
-                        rows.append({"Origen": origen, "Año": año, "Valor": valor})
-                else:
-                    for año in ["Año en curso", "Año 1", "Año 2", "Año 3"]:
-                        valor = fila.get(año, 0)
-                        rows.append({"Origen": origen, "Año": año, "Valor": valor})
-            return pd.DataFrame(rows)
-
-        df_int = totalizar(st.session_state.ventas_interno, subcategorias_agro, "Ventas Interno")
-        df_ext = totalizar(st.session_state.ventas_externo, subcategorias_agro, "Ventas Externo")
-        df_comp = totalizar(st.session_state.compras, subcategorias_agro, "Compras")
-
-        df_total = pd.concat([df_int, df_ext, df_comp], ignore_index=True)
-
-        # Normalizar nombres de años
-        df_total["Año"] = df_total["Año"].replace({
-            "Año en curso": "Año en curso",  
-            "Año 1": "Año 1",
-            "Año 2": "Año 2",
-            "Año 3": "Año 3"
+        st.session_state.respuestas.update({
+            "Comercializa": comercializa,
+            "Proveedores": proveedores
         })
 
-        pivot = df_total.pivot_table(index="Año", columns="Origen", values="Valor", aggfunc="sum").fillna(0)
-        pivot["Ventas"] = pivot.get("Ventas Interno", 0) + pivot.get("Ventas Externo", 0)
-        pivot["Resultado"] = pivot["Ventas"] - pivot.get("Compras", 0)
-        pivot = pivot[["Ventas Interno", "Ventas Externo", "Compras", "Ventas", "Resultado"]]
-        pivot = pivot.reset_index().rename(columns={"Año": "Año calendario"})
+        st.divider()
+        st.markdown("##### Plan de ventas mensual por actividad")
 
-        st.markdown("##### Ventas, Compras y Resultado por Año")
-        st.dataframe(pivot, use_container_width=True)
+        for act in actividades:
+            st.markdown(f"##### {act}")
+            if act == "Agricultura":
+                columnas = PRODUCTOS_AGRICULTURA
+            elif act == "Ganadería":
+                columnas = CATEGORIAS_GANADERIA
+            elif act == "Tambo":
+                columnas = ["Litros"]
+            elif act == "Otros":
+                nombre_actividad = st.text_input("Nombre de la actividad", key="otros_nombre")
+                if nombre_actividad:
+                    columnas = [nombre_actividad]
+                else:
+                    continue
+            else:
+                continue
 
-        
+            # Usamos la clave dentro de planes_guardados_por_actividad
+            if act in st.session_state.planes_guardados_por_actividad:
+                df_temp = st.session_state.planes_guardados_por_actividad[act].copy()
+            else:
+                df_temp = crear_df_ventas(meses_largos, columnas)
 
+            column_config = {
+                col: st.column_config.NumberColumn(col, format="%.3f")
+                for col in columnas
+            }
+            column_config["Mes"] = st.column_config.SelectboxColumn("Mes", options=meses_largos)
 
-# ---------------- TAB: Manifestación de Bienes ----------------
-with tabs[3]:
+            # Usamos una clave de widget distinta para evitar conflictos
+            widget_key = f"editor_actividad_{act}"
 
-    razon_social = respuestas.get("Razón Social / Nombre y apellido", "No definido")
-    domicilio_real = (
-        f"{respuestas.get('Calle (real y legal)', '')} "
-        f"{respuestas.get('Número (real y legal)', '')}, "
-        f"{respuestas.get('Localidad (real y legal)', '')}, "
-        f"{respuestas.get('Provincia (real y legal)', '')}"
-    )
-    st.markdown(f"**Manifestación de Bienes de:** `{razon_social}`")
-    st.markdown(f"**Domicilio Real:** `{domicilio_real}`")
+            edited_df = st.data_editor(
+                df_temp,
+                key=widget_key,
+                use_container_width=True,
+                num_rows="fixed",
+                column_config=column_config
+            )
 
-    fecha_actual = st.date_input("**Manifestación de Bienes al:**", key="mani_fecha_tab4")
+            # Solo guardamos en planes_guardados_por_actividad
+            st.session_state.planes_guardados_por_actividad[act] = edited_df
 
-    with st.expander("**Activo**"):
-        st.markdown("**Disponibilidades (cajas, bancos, etc.)**")
-        col1, col2 = st.columns(2)
-        disponibilidades_fiscal = col1.number_input("Valor Fiscal (Miles $)", min_value=0.0, step=1.0, key="activo_dispo_fiscal")
-        disponibilidades_mercado = col2.number_input("Valor Mercado (Miles $)", min_value=0.0, step=1.0, key="activo_dispo_mercado")
-        st.markdown("---")
-
-        st.markdown("**Inversiones (títulos, acciones, plazos fijos, etc.)**")
-        col1, col2 = st.columns(2)
-        inversiones_fiscal = col1.number_input("Valor Fiscal (Miles $)", min_value=0.0, step=1.0, key="activo_inv_fiscal")
-        inversiones_mercado = col2.number_input("Valor Mercado (Miles $)", min_value=0.0, step=1.0, key="activo_inv_mercado")
-        st.markdown("---")
-
-        st.markdown("**Créditos**")
-        col1, col2 = st.columns(2)
-        creditos_fiscal = col1.number_input("Valor Fiscal (Miles $)", min_value=0.0, step=1.0, key="activo_cred_fiscal")
-        creditos_mercado = col2.number_input("Valor Mercado (Miles $)", min_value=0.0, step=1.0, key="activo_cred_mercado")
-        st.markdown("---")
-
-        st.markdown("**Bienes de Uso - Inmuebles**")
-        if "inmuebles" not in st.session_state:
-            st.session_state.inmuebles = []
-        if st.button("➕ Agregar Inmueble"):
-            st.session_state.inmuebles.append({"Tipo": "", "Dirección": "", "Provincia": "", "Destino": "", "m2/has": 0.0, "Valor Fiscal": 0.0, "Valor Mercado": 0.0})
-        for idx, item in enumerate(st.session_state.inmuebles):
-            st.write(f"**Inmueble {idx+1}**")
-            col1, col2, col3 = st.columns(3)
-            item["Tipo"] = col1.text_input("Tipo Inmueble", item["Tipo"], key=f"inm_tipo_{idx}")
-            item["Dirección"] = col2.text_input("Dirección", item["Dirección"], key=f"inm_dir_{idx}")
-            item["Provincia"] = col3.text_input("Provincia", item["Provincia"], key=f"inm_prov_{idx}")
-            col1, col2, col3, col4 = st.columns(4)
-            item["Destino"] = col1.text_input("Destino", item["Destino"], key=f"inm_dest_{idx}")
-            item["m2/has"] = col2.number_input("m2 / has", value=item["m2/has"], key=f"inm_m2_{idx}")
-            item["Valor Fiscal"] = col3.number_input("Valor Fiscal (Miles $)", value=item["Valor Fiscal"], key=f"inm_valf_{idx}")
-            item["Valor Mercado"] = col4.number_input("Valor Mercado (Miles $)", value=item["Valor Mercado"], key=f"inm_valm_{idx}")
-            if st.button(f"❌ Eliminar Inmueble {idx+1}"):
-                st.session_state.inmuebles.pop(idx)
-                st.rerun()
-        st.markdown("---")
-
-        st.markdown("**Rodados**")
-        if "rodados" not in st.session_state:
-            st.session_state.rodados = []
-        if st.button("➕ Agregar Rodado"):
-            st.session_state.rodados.append({"Tipo": "", "Marca": "", "Valor Fiscal": 0.0, "Valor Mercado": 0.0})
-        for idx, item in enumerate(st.session_state.rodados):
-            st.write(f"**Rodado {idx+1}**")
-            col1, col2 = st.columns(2)
-            item["Tipo"] = col1.text_input("Tipo", item["Tipo"], key=f"rod_tipo_{idx}")
-            item["Marca"] = col2.text_input("Marca", item["Marca"], key=f"rod_marca_{idx}")
-            col1, col2 = st.columns(2)
-            item["Valor Fiscal"] = col1.number_input("Valor Fiscal (Miles $)", value=item["Valor Fiscal"], key=f"rod_valf_{idx}")
-            item["Valor Mercado"] = col2.number_input("Valor Mercado (Miles $)", value=item["Valor Mercado"], key=f"rod_valm_{idx}")
-            if st.button(f"❌ Eliminar Rodado {idx+1}"):
-                st.session_state.rodados.pop(idx)
-                st.rerun()
-        st.markdown("---")
-
-        st.markdown("**Otros Bienes**")
-        col1, col2 = st.columns(2)
-        otros_fiscal = col1.number_input("Valor Fiscal (Miles $)", min_value=0.0, step=1.0, key="activo_otros_fiscal")
-        otros_mercado = col2.number_input("Valor Mercado (Miles $)", min_value=0.0, step=1.0, key="activo_otros_mercado")
-
-    with st.expander("**Pasivo**"):
-        deuda_bancos_total = (total_bancos_ars + total_bancos_usd) if 'total_bancos_ars' in locals() else 0.0
-        deuda_mercado_total = (total_mercado_ars + total_mercado_usd) if 'total_mercado_ars' in locals() else 0.0
-        deuda_comercial_total = (total_comercial_ars + total_comercial_usd) if 'total_comercial_ars' in locals() else 0.0
-        st.number_input("Deuda Bancaria / Financiera (Miles $)", value=deuda_bancos_total, disabled=True, key="pasivo_bancos")
-        st.number_input("Deuda Mercado de Capitales (Miles $)", value=deuda_mercado_total, disabled=True, key="pasivo_mercado")
-        st.number_input("Deuda Comercial (Miles $)", value=deuda_comercial_total, disabled=True, key="pasivo_comercial")
-        otras_deudas = st.number_input("Otras Deudas (Miles $)", min_value=0.0, step=1.0, key="pasivo_otras")
-        pasivo_total = deuda_bancos_total + deuda_mercado_total + deuda_comercial_total + otras_deudas
-        st.success(f"**Total del Pasivo:** ${pasivo_total:,.2f}")
-
-    with st.expander("**Ingresos y Egresos Anuales**"):
-        col1, col2 = st.columns(2)
-        ingresos_honorarios = col1.number_input("Ingresos por Honorarios", min_value=0.0, step=1.0, key="mani_ing_honor")
-        ingresos_rentas = col1.number_input("Ingresos por Rentas", min_value=0.0, step=1.0, key="mani_ing_rentas")
-        ingresos_otros = col1.number_input("Ingresos por Otros", min_value=0.0, step=1.0, key="mani_ing_otros")
-        ingresos_total = ingresos_honorarios + ingresos_rentas + ingresos_otros
-        egresos_honorarios = col2.number_input("Egresos por Honorarios", min_value=0.0, step=1.0, key="mani_egr_honor")
-        egresos_rentas = col2.number_input("Egresos por Rentas", min_value=0.0, step=1.0, key="mani_egr_rentas")
-        egresos_otros = col2.number_input("Egresos por Otros", min_value=0.0, step=1.0, key="mani_egr_otros")
-        egresos_total = egresos_honorarios + egresos_rentas + egresos_otros
-        diferencia = ingresos_total - egresos_total
-
-    # === GUARDAR TODOS LOS DATAFRAMES GENERADOS ===
-    df_activo_resumen = pd.DataFrame([{
-        "Disponibilidades - Fiscal": disponibilidades_fiscal,
-        "Disponibilidades - Mercado": disponibilidades_mercado,
-        "Inversiones - Fiscal": inversiones_fiscal,
-        "Inversiones - Mercado": inversiones_mercado,
-        "Créditos - Fiscal": creditos_fiscal,
-        "Créditos - Mercado": creditos_mercado,
-        "Otros Bienes - Fiscal": otros_fiscal,
-        "Otros Bienes - Mercado": otros_mercado,
-    }])
-    st.session_state.df_activo_resumen = df_activo_resumen
-
-    df_inmuebles = pd.DataFrame(st.session_state.inmuebles)
-    st.session_state.df_inmuebles = df_inmuebles
-
-    df_rodados = pd.DataFrame(st.session_state.rodados)
-    st.session_state.df_rodados = df_rodados
-
-    df_pasivo = pd.DataFrame([{
-        "Deuda Bancaria / Financiera": deuda_bancos_total,
-        "Deuda Mercado de Capitales": deuda_mercado_total,
-        "Deuda Comercial": deuda_comercial_total,
-        "Otras Deudas": otras_deudas,
-        "Total Pasivo": pasivo_total
-    }])
-    st.session_state.df_pasivo = df_pasivo
-
-    df_ingresos_egresos = pd.DataFrame([{
-        "Ingresos Honorarios": ingresos_honorarios,
-        "Ingresos Rentas": ingresos_rentas,
-        "Ingresos Otros": ingresos_otros,
-        "Total Ingresos": ingresos_total,
-        "Egresos Honorarios": egresos_honorarios,
-        "Egresos Rentas": egresos_rentas,
-        "Egresos Otros": egresos_otros,
-        "Total Egresos": egresos_total,
-        "Diferencia": diferencia
-    }])
-    st.session_state.df_ingresos_egresos = df_ingresos_egresos
-
-    
-
-
+      
 @st.cache_data(show_spinner=False)
 def obtener_geodatos():
     url_prov = "https://apis.datos.gob.ar/georef/api/provincias"
@@ -1986,691 +1332,402 @@ def obtener_geodatos():
 
 provincias, departamentos_por_provincia, localidades_por_provincia = obtener_geodatos()
 
-    #-----Agro-----
-with tabs[4]:
-    # ✅ Inicialización segura sin sobrescribir progreso
-    if "campanias_agricolas" not in st.session_state:
-        st.session_state.campanias_agricolas = {
-            "23/24": {"nombre_editable": "23/24", "cultivos": []},
-            "22/23": {"nombre_editable": "22/23", "cultivos": []},
-            "21/22": {"nombre_editable": "21/22", "cultivos": []},
-        }
+        
 
-    if "ganaderia_data" not in st.session_state:
-        st.session_state.ganaderia_data = {
-            "Tambo": [],
-            "Base Forrajera": [],
-            "Hacienda de terceros": [],
-            "Otras Actividades": []
-        }
 
-    if "actividad" not in st.session_state:
-        st.session_state.actividad = []
 
-    # ✅ Solución definitiva al multiselect para restaurar selección
-    seleccion = st.multiselect(
-        "**Seleccioná la/las Actividad/es**",
-        ["Agricultura", "Ganadería"],
-        default=st.session_state.actividad,
-        key="actividad_multiselect"
-    )
-    st.session_state.actividad = seleccion
-
-    # 🔁 Limpiar los bloques si ya no están seleccionados
-    if "Agricultura" not in st.session_state.actividad:
-        st.session_state.df_agricultura_total = pd.DataFrame()
-    if "Ganadería" not in st.session_state.actividad:
-        st.session_state.df_ganaderia_total = pd.DataFrame()
-
-   
-    
-
+# ================== CAMPOS PROPIOS ==================
+with tabs[3]:
+    # ================== CONFIGURACIÓN GENERAL ==================
+    cultivos = ["Maíz", "Soja", "Soja 2da", "Trigo", "Cebada", "Sorgo", "Girasol", "Poroto", "Otros Cultivos"]
+    metodologias_pago = ["Porcentaje de rinde", "Precio fijo", "Mixto"]
 
     with st.expander("**Campos**"):
         st.subheader("Campos Propios")
-        if "campos_propios" not in st.session_state:
-            st.session_state.campos_propios = []
 
-        if st.button("➕ Agregar Campo Propio"):
-            st.session_state.campos_propios.append({
-                "Nombre": "",
-                "Titularidad": "",
-                "Localidad": "",
-                "Partido": "",
-                "Provincia": "",
-                "Has": 0.0,
-                "Valor U$/ha": 0.0,
-                "Has Hipotecadas": 0.0,
-                "Estado Actual": ""
+        # Inicialización
+        if "df_campos" not in st.session_state:
+            st.session_state.df_campos = pd.DataFrame({
+                "Nombre del Campo": [f"Ejemplo {i+1}" for i in range(8)],
+                "Provincia": ["" for _ in range(8)],
+                "Partido": ["" for _ in range(8)],
+                "Localidad": ["" for _ in range(8)],
+                "Titularidad": ["" for _ in range(8)],
+                "Has": [0.0 for _ in range(8)],
+                "Valor U$/ha": [0.0 for _ in range(8)],
+                "Has Hipotecadas": [0.0 for _ in range(8)],
+                "Estado Actual": ["" for _ in range(8)],
             })
 
-        for idx, campo in enumerate(st.session_state.campos_propios):
-            st.write(f"**Campo Propio Nro {idx+1}**")
-            cols = st.columns(2)
-            campo["Nombre"] = cols[0].text_input("Nombre del Campo", campo["Nombre"], key=f"campo_nombre_{idx}")
-            campo["Titularidad"] = cols[1].text_input("Titularidad", campo["Titularidad"], key=f"campo_titular_{idx}")
-            cols = st.columns(3)
-            campo["Provincia"] = cols[0].selectbox("Provincia", provincias, index=provincias.index(campo["Provincia"]) if campo["Provincia"] in provincias else 0, key=f"campo_prov_{idx}")
-            campo["Partido"] = cols[1].selectbox("Partido", departamentos_por_provincia.get(campo["Provincia"], []), index=departamentos_por_provincia.get(campo["Provincia"], []).index(campo["Partido"]) if campo["Partido"] in departamentos_por_provincia.get(campo["Provincia"], []) else 0, key=f"campo_partido_{idx}")
-            campo["Localidad"] = cols[2].selectbox("Localidad", localidades_por_provincia.get(campo["Provincia"], []), index=localidades_por_provincia.get(campo["Provincia"], []).index(campo["Localidad"]) if campo["Localidad"] in localidades_por_provincia.get(campo["Provincia"], []) else 0, key=f"campo_localidad_{idx}")
-            cols2 = st.columns(3)
-            campo["Has"] = cols2[0].number_input("Has", value=campo["Has"], key=f"campo_has_{idx}")
-            campo["Valor U$/ha"] = cols2[1].number_input("Valor U$/ha", value=campo["Valor U$/ha"], key=f"campo_valor_{idx}")
-            campo["Has Hipotecadas"] = cols2[2].number_input("Has Hipotecadas", value=campo["Has Hipotecadas"], key=f"campo_hipoteca_{idx}")
-            
-            campo["Estado Actual"] = st.text_input("Estado Actual", campo["Estado Actual"], key=f"campo_estado_{idx}")
+        df_campos_tmp = st.data_editor(
+            st.session_state.df_campos.copy(),
+            key="editor_df_campos",
+            num_rows="dynamic",
+            use_container_width=True
+        )
 
-            if st.button(f"❌ Eliminar Campo Propio Nro {idx+1}"):
-                st.session_state.campos_propios.pop(idx)
-                st.rerun()
-        
-            df_campo_propio = pd.DataFrame(st.session_state.campos_propios)
-        else:
-            df_campo_propio = pd.DataFrame([{
-                "Nombre": "",
-                "Titularidad": "",
-                "Localidad": "",
-                "Partido": "",
-                "Provincia": "",
-                "Has": 0.0,
-                "Valor U$/ha": 0.0,
-                "Has Hipotecadas": 0.0,
-                "Estado Actual": ""
-            }])
-            
+        if st.button("💾 Guardar Campos Propios"):
+            st.session_state.df_campos = df_campos_tmp
+            st.success("✅ Campos propios actualizados.")
 
-        st.markdown("---")
+        st.divider()
         st.subheader("Campos Arrendados")
-        if "campos_arrendados" not in st.session_state:
-            st.session_state.campos_arrendados = []
 
-        if st.button("➕ Agregar Campo Arrendado"):
-            st.session_state.campos_arrendados.append({
-                "Nombre": "",
-                "Titularidad": "",
-                "Localidad": "",
-                "Partido": "",
-                "Provincia": "",
-                "Has": 0.0,
-                "Precio US$/qq/kg": 0.0,
-                "Plazo contratos (años)": 0,
-                "Metodología Pago": ""
+        # Inicialización
+        if "df_campos_arrendados" not in st.session_state:
+            st.session_state.df_campos_arrendados = pd.DataFrame({
+                "Nombre del Campo": [f"Ejemplo Arrendado {i+1}" for i in range(8)],
+                "Provincia": ["" for _ in range(8)],
+                "Partido": ["" for _ in range(8)],
+                "Localidad": ["" for _ in range(8)],
+                "Arrendador": ["" for _ in range(8)],
+                "Has Arrendadas": [0.0 for _ in range(8)],
+                "Valor U$/ha": [0.0 for _ in range(8)],
+                "Metodología de Pago": ["" for _ in range(8)],
+                "Duración del Contrato": ["" for _ in range(8)],
             })
 
-        for idx, campo in enumerate(st.session_state.campos_arrendados):
-            st.write(f"**Campo Arrendado Nro {idx+1}**")
-            cols = st.columns(2)
-            campo["Nombre"] = cols[0].text_input("Nombre del Campo", campo["Nombre"], key=f"arr_nombre_{idx}")
-            campo["Titularidad"] = cols[1].text_input("Titularidad", campo["Titularidad"], key=f"arr_titular_{idx}")
-            cols = st.columns(3)
-            campo["Provincia"] = cols[0].selectbox("Provincia", provincias, index=provincias.index(campo["Provincia"]) if campo["Provincia"] in provincias else 0, key=f"arr_prov_{idx}")
-            campo["Partido"] = cols[1].selectbox("Partido", departamentos_por_provincia.get(campo["Provincia"], []), index=departamentos_por_provincia.get(campo["Provincia"], []).index(campo["Partido"]) if campo["Partido"] in departamentos_por_provincia.get(campo["Provincia"], []) else 0, key=f"arr_partido_{idx}")
-            campo["Localidad"] = cols[2].selectbox("Localidad", localidades_por_provincia.get(campo["Provincia"], []), index=localidades_por_provincia.get(campo["Provincia"], []).index(campo["Localidad"]) if campo["Localidad"] in localidades_por_provincia.get(campo["Provincia"], []) else 0, key=f"arr_localidad_{idx}")
-            cols2 = st.columns(3)
-            campo["Has"] = cols2[0].number_input("Has", value=campo["Has"], key=f"arr_has_{idx}")
-            campo["Precio US$/qq/kg"] = cols2[1].number_input("Precio US$/qq/kg", value=campo["Precio US$/qq/kg"], key=f"arr_precio_{idx}")
-            campo["Plazo contratos (años)"] = cols2[2].number_input("Plazo contratos (años)", value=campo["Plazo contratos (años)"], key=f"arr_plazo_{idx}")
-            campo["Metodología Pago"] = st.text_input("Metodología Pago", campo["Metodología Pago"], key=f"arr_pago_{idx}")
+        df_arrendados_tmp = st.data_editor(
+            st.session_state.df_campos_arrendados.copy(),
+            key="editor_df_campos_arrendados",
+            column_config={
+                "Metodología de Pago": st.column_config.SelectboxColumn("Metodología de Pago", options=metodologias_pago)
+            },
+            num_rows="dynamic",
+            use_container_width=True
+        )
 
-            if st.button(f"❌ Eliminar Campo Arrendado Nro {idx+1}"):
-                st.session_state.campos_arrendados.pop(idx)
-                st.rerun()
-            df_campo_arrendado = pd.DataFrame(st.session_state.campos_arrendados)
-        else:
-            df_campo_arrendado = pd.DataFrame([{
-                "Nombre": "",
-                "Titularidad": "",
-                "Localidad": "",
-                "Partido": "",
-                "Provincia": "",
-                "Has": 0.0,
-                "Precio US$/qq/kg": 0.0,
-                "Plazo contratos (años)": 0,
-                "Metodología Pago": ""
-            }])
+        if st.button("💾 Guardar Campos Arrendados"):
+            st.session_state.df_campos_arrendados = df_arrendados_tmp
+            st.success("✅ Campos arrendados actualizados.")
 
-    campanias_fijas = ["24/25", "23/24", "22/23"]
+    # ================== AGRICULTURA ==================
 
-    # 🔒 Forzar estructura dict si viene corrupta (lista vieja o mal definida)
-    if not isinstance(st.session_state.get("campanias_agricolas", None), dict):
-        st.session_state.campanias_agricolas = {}
+    with st.expander("**Agricultura**"):
+        cultivos = ["Maíz", "Soja", "Soja 2da", "Trigo", "Cebada", "Sorgo", "Girasol", "Poroto", "Otros Cultivos"]
+        indicadores = [
+            "Has p/adm", "Has a %", "% Propio", "Rendimiento (tn/ha)",
+            "Gastos Comerc. y Cosecha (US$/ha)", "Gastos Directos (US$/ha)",
+            "Stock actual (tn)", "Precio Actual/Futuro (US$/tn)"
+        ]
+        campanias_fijas = {
+            "actual": "ej 24/25",
+            "hace_1": "ej 23/24",
+            "hace_2": "ej 22/23"
+        }
 
-    # Inicializar campañas si faltan
-    for c in campanias_fijas:
-        if c not in st.session_state.campanias_agricolas:
-            st.session_state.campanias_agricolas[c] = {
-                "nombre_editable": c,
-                "cultivos": []
+        # Inicialización si no existe
+        if "agricultura_por_campania" not in st.session_state:
+            st.session_state.agricultura_por_campania = {}
+            for clave in campanias_fijas.values():
+                st.session_state.agricultura_por_campania[clave] = pd.DataFrame(
+                    0.0, index=indicadores, columns=cultivos
+                )
+
+        if "nombres_visibles_campanias" not in st.session_state:
+            st.session_state.nombres_visibles_campanias = {
+                "actual": "Campaña Actual",
+                "hace_1": "Campaña hace 1 año",
+                "hace_2": "Campaña hace 2 años"
             }
 
-    # BLOQUE AGRICULTURA
-    if "Agricultura" in st.session_state.actividad:
-        with st.expander("**Agricultura**"):
-            st.subheader("Campañas Agrícolas")
-            opciones_cultivo = ["Maíz", "Soja", "Soja 2da", "Trigo", "Cebada", "Sorgo", "Girasol", "Poroto", "Otros Cultivos"]
+        for clave_logica, clave_real in campanias_fijas.items():
+            st.divider()
 
-            for i, clave in enumerate(campanias_fijas):
-                campania = st.session_state.campanias_agricolas[clave]
-                años_atras = len(campanias_fijas) - 1 - i
+            # Editar nombre visible de la campaña
+            nombre_visible = st.text_input(
+                f"📝 Nombre de la campaña {clave_logica.replace('_', ' ')} ({clave_real})",
+                value=st.session_state.nombres_visibles_campanias.get(clave_logica, f"Campaña {clave_real}"),
+                key=f"nombre_editable_{clave_logica}"
+            )
+            st.session_state.nombres_visibles_campanias[clave_logica] = nombre_visible
+            st.subheader(nombre_visible)
 
-                cols = st.columns([0.5, 1, 0.5])
-                titulo = f"##### ➕ **Agregar Indicativo de la Campaña actual:**\n **ej ({clave})**" if años_atras == 0 else f"##### ➕ **Agregar Indicativo de la Campaña {años_atras} año(s) atrás:**\n **ej ({clave})**"
-                campania["nombre_editable"] = cols[1].text_input(titulo, value=campania["nombre_editable"], key=f"nombre_editable_{clave}")
+            # Obtener copia para edición
+            df_agro = st.session_state.agricultura_por_campania.get(clave_real, pd.DataFrame(
+                0.0, index=indicadores, columns=cultivos
+            )).copy()
 
-                with st.form(key=f"form_agregar_cultivo_{clave}"):
-                    st.markdown(f"**Agregar Cultivo para {campania['nombre_editable']}**")
-
-                    columnas = st.columns(3)
-                    cultivo_nuevo = columnas[0].selectbox("Cultivo", opciones_cultivo, key=f"nuevo_cultivo_{clave}")
-                    otro_cultivo_nuevo = columnas[1].text_input("Otro (si corresponde)", key=f"nuevo_otro_{clave}")
-                    has_padm_nuevo = columnas[2].number_input("Has p/adm", min_value=0.0, key=f"nuevo_haspadm_{clave}")
-
-                    cols2 = st.columns(3)
-                    has_porcentaje_nuevo = cols2[0].number_input("Has a %", min_value=0.0, key=f"nuevo_porcentaje_{clave}")
-                    propio_nuevo = cols2[1].number_input("% Propio", min_value=0.0, max_value=100.0, key=f"nuevo_propio_{clave}")
-                    rendimiento_nuevo = cols2[2].number_input("Rendimiento (tn/ha)", min_value=0.0, key=f"nuevo_rend_{clave}")
-
-                    cols3 = st.columns(2)
-                    gastos_comerc_nuevo = cols3[0].number_input("Gastos Comerc. y Cosecha (US$/ha)", min_value=0.0, key=f"nuevo_comerc_{clave}")
-                    gastos_directos_nuevo = cols3[1].number_input("Gastos Directos (US$/ha)", min_value=0.0, key=f"nuevo_directos_{clave}")
-
-                    cols4 = st.columns(2)
-                    stock_nuevo = cols4[0].number_input("Stock actual (tn)", min_value=0.0, key=f"nuevo_stock_{clave}")
-                    precio_nuevo = cols4[1].number_input("Precio Actual/Futuro (US$/tn)", min_value=0.0, key=f"nuevo_precio_{clave}")
-
-                    submit = st.form_submit_button("Agregar Cultivo")
-
-                if submit:
-                    campania["cultivos"].append({
-                        "Cultivo": cultivo_nuevo,
-                        "Otro Cultivo": otro_cultivo_nuevo if cultivo_nuevo == "Otros Cultivos" else "",
-                        "Has p/adm": has_padm_nuevo,
-                        "Has a %": has_porcentaje_nuevo,
-                        "% Propio": propio_nuevo,
-                        "Rendimiento (tn/ha)": rendimiento_nuevo,
-                        "Gastos Comerc. y Cosecha (US$/ha)": gastos_comerc_nuevo,
-                        "Gastos Directos (US$/ha)": gastos_directos_nuevo,
-                        "Stock actual (tn)": stock_nuevo,
-                        "Precio Actual/Futuro (US$/tn)": precio_nuevo
-                    })
-                    st.success("✅ Cultivo agregado correctamente.")
-                    st.rerun()
-
-                if campania["cultivos"]:
-                    st.markdown(f"**Resumen para la Campaña {campania['nombre_editable']}**")
-
-                    columnas_fijas = [
-                        "Cultivo", "Otro Cultivo", "Has p/adm", "Has a %", "% Propio",
-                        "Rendimiento (tn/ha)", "Gastos Comerc. y Cosecha (US$/ha)",
-                        "Gastos Directos (US$/ha)", "Stock actual (tn)", "Precio Actual/Futuro (US$/tn)"
-                    ]
-
-                    df = pd.DataFrame(campania["cultivos"])
-                    for col in columnas_fijas:
-                        if col not in df.columns:
-                            df[col] = 0.0 if "Has" in col or "US$" in col or "tn" in col or "%" in col else ""
-                    df = df[columnas_fijas]
-                    st.dataframe(df)
-
-                    cols_elim = st.columns(5)
-                    for idx, cultivo in enumerate(campania["cultivos"]):
-                        nombre = cultivo["Otro Cultivo"] if cultivo["Cultivo"] == "Otros Cultivos" else cultivo["Cultivo"]
-                        col = cols_elim[idx % 3]
-                        with col:
-                            if st.button(f"❌ Eliminar {nombre}", key=f"delete_{clave}_{idx}"):
-                                campania["cultivos"].pop(idx)
-                                st.rerun()
-
-            # Consolidar DataFrames para exportador general
-            df_agricultura_suma_total = pd.concat([
-                pd.DataFrame(st.session_state.campanias_agricolas[clave]["cultivos"]).assign(Campaña=st.session_state.campanias_agricolas[clave]["nombre_editable"])
-                for clave in campanias_fijas if st.session_state.campanias_agricolas[clave]["cultivos"]
-            ], ignore_index=True)
-
-            columnas_finales = [
-                "Campaña", "Cultivo", "Otro Cultivo", "Has p/adm", "Has a %", "% Propio",
-                "Rendimiento (tn/ha)", "Gastos Comerc. y Cosecha (US$/ha)",
-                "Gastos Directos (US$/ha)", "Stock actual (tn)", "Precio Actual/Futuro (US$/tn)"
-            ]
-
-            for col in columnas_finales:
-                if col not in df_agricultura_suma_total.columns:
-                    df_agricultura_suma_total[col] = 0.0 if "Has" in col or "US$" in col or "tn" in col or "%" in col else ""
-
-            df_agricultura_suma_total = df_agricultura_suma_total[columnas_finales]
-            st.session_state.df_agricultura_total = df_agricultura_suma_total
-            
-        
-    pass
-                
-    
-    # === ESTRUCTURA FIJA GANADERÍA (una sola vez al principio del bloque) ===
-    actividades = {
-        "cria": {
-            "titulo": "Ganadería - Cría",
-            "categorias": ["Vacas", "Vaquillonas", "Terneros/as", "Toros"],
-            "indices": ["% Preñez", "% Parición", "% Destete"]
-        },
-        "invernada": {
-            "titulo": "Ganadería - Invernada",
-            "categorias": ["Novillos", "Novillitos", "Vacas descarte", "Vaquillonas"],
-            "indices": ["Compras - Cabezas por año", "Compras - Peso Promedio", "Ventas - Cabezas por año", "Ventas - Peso Promedio"]
-        },
-        "feedlot": {
-            "titulo": "Ganadería - Feedlot",
-            "categorias": ["Novillos", "Novillitos", "Vacas descarte", "Vaquillonas"],
-            "indices": ["Compras - Cabezas por año", "Compras - Peso Promedio", "Tiempo de engorde (meses)", "Ventas - Cabezas por año", "Ventas - Peso Promedio"]
-        },
-        "tambo": {
-            "titulo": "Tambo",
-            "categorias": ["Vacas (VO+VS)", "Vaquillonas", "Terneras", "Terneros", "Toros"],
-            "indices": ["Lt/día", "Precio US$/Lt", "% VO", "% Grasa butirosa"]
-        }
-    }
-
-    columnas_base = [
-        "Actividad", "Categoría","Propias", "De Terceros", "Precio estimado (US$/cab)",
-        "Stock total (Kg)", "Valor total (US$)","Gasto Directo (US$/cab)", "Gasto Comercial (US$/cab)",
-        "% Preñez", "% Parición", "% Destete", "Compras - Cabezas por año", "Compras - Peso Promedio",
-        "Tiempo de engorde (meses)", "Ventas - Cabezas por año", "Ventas - Peso Promedio",
-        "Lt/día", "Precio US$/Lt", "% VO", "% Grasa butirosa"
-    ]
-
-    # ✅ Crear DataFrame completo con combinaciones únicas solo una vez
-    if "df_ganaderia" not in st.session_state:
-        datos_fijos = []
-        for act_key, act in actividades.items():
-            for cat in act["categorias"] + ["Totales"]:
-                fila = {col: 0 for col in columnas_base}
-                fila["Actividad"] = act["titulo"]
-                fila["Categoría"] = cat
-                datos_fijos.append(fila)
-        df_base = pd.DataFrame(datos_fijos)
-        st.session_state.df_ganaderia = df_base.copy()
-    else:
-        # Eliminar duplicados por seguridad
-        st.session_state.df_ganaderia.drop_duplicates(subset=["Actividad", "Categoría"], inplace=True)
-
-    # === UI y actualización del DataFrame ===
-    if "Ganadería" in st.session_state.actividad:
-        with st.expander("**Ganadería**"):
-            secciones = actividades
-
-            if "ganaderia_seleccionadas" not in st.session_state:
-                st.session_state.ganaderia_seleccionadas = []
-
-            seleccionadas = st.multiselect(
-                "**Seleccioná la/las Actividad/es a completar:**",
-                list(secciones.keys()),
-                default=st.session_state.ganaderia_seleccionadas,
-                format_func=lambda x: secciones[x]["titulo"],
-                key="ganaderia_seleccionadas"
+            df_agro_editado = st.data_editor(
+                df_agro,
+                key=f"editor_agro_{clave_real}",
+                num_rows="fixed",
+                use_container_width=True
             )
 
-            for clave in seleccionadas:
-                info = actividades[clave]
-                titulo = info["titulo"]
-                categorias = info["categorias"]
-                indices = info["indices"]
+            if st.button(f"💾 Guardar {nombre_visible}", key=f"guardar_agro_{clave_real}"):
+                st.session_state.agricultura_por_campania[clave_real] = df_agro_editado
+                st.success(f"✅ {nombre_visible} actualizada.")
 
-                st.markdown(f"### {titulo}")
-                for cat in categorias:
-                    st.markdown(f"**{cat}**")
-                    cols = st.columns(4)
-                    propias = cols[0].number_input("Propias", key=f"{clave}_{cat}_propias", value=0)
-                    terceros = cols[1].number_input("De Terceros", key=f"{clave}_{cat}_terceros", value=0)
-                    directo = cols[2].number_input("Gasto Directo (US$/cab)", key=f"{clave}_{cat}_directo", value=0.0)
-                    comerc = cols[3].number_input("Gasto Comercial (US$/cab)", key=f"{clave}_{cat}_comerc", value=0.0)
+    # === GANADERÍA (CORREGIDO) ===
+    with st.expander("**Ganadería**"):
 
-                    st.session_state.df_ganaderia.loc[
-                        (st.session_state.df_ganaderia["Actividad"] == titulo) & 
-                        (st.session_state.df_ganaderia["Categoría"] == cat),
-                        ["Propias", "De Terceros", "Gasto Directo (US$/cab)", "Gasto Comercial (US$/cab)"]
-                    ] = [propias, terceros, directo, comerc]
+        def mostrar_editor_dataframe(nombre_df, key_widget, default_df):
+            # Evitar conflicto: eliminar key del widget
+            st.session_state.pop(key_widget, None)
 
-                st.markdown("**Índices Generales**")
-                indices_generales = {}
-                if len(indices) <= 3:
-                    cols = st.columns(len(indices))
-                    for i, ind in enumerate(indices):
-                        indices_generales[ind] = cols[i].number_input(ind, key=f"{clave}_{ind}", value=0.0)
-                else:
-                    mitad = (len(indices) + 1) // 2
-                    col1, col2 = st.columns(2)
-                    for i in range(mitad):
-                        ind = indices[i]
-                        indices_generales[ind] = col1.number_input(ind, key=f"{clave}_{ind}", value=0.0)
-                    for i in range(mitad, len(indices)):
-                        ind = indices[i]
-                        indices_generales[ind] = col2.number_input(ind, key=f"{clave}_{ind}", value=0.0)
+            # Inicializar si no existe o viene mal del .pkl
+            if nombre_df not in st.session_state or not isinstance(st.session_state[nombre_df], pd.DataFrame):
+                try:
+                    st.session_state[nombre_df] = pd.DataFrame(st.session_state[nombre_df])
+                except:
+                    st.session_state[nombre_df] = default_df
 
-                st.session_state.df_ganaderia.loc[
-                    (st.session_state.df_ganaderia["Actividad"] == titulo) & 
-                    (st.session_state.df_ganaderia["Categoría"] == "Totales"),
-                    list(indices_generales.keys())
-                ] = list(indices_generales.values())
+            # Editor
+            df_editado = st.data_editor(
+                st.session_state[nombre_df],
+                key=key_widget,
+                use_container_width=True,
+                num_rows="fixed"
+            )
 
-            # === Mostrar resumen ===
-            st.markdown("##### Resumen Ganadería")
-            # Asegurar que todas las columnas de columnas_base existan en el DataFrame
-            for col in columnas_base:
-                if col not in st.session_state.df_ganaderia.columns:
-                    st.session_state.df_ganaderia[col] = 0  # o np.nan si preferís
+            # Guardar si cambió
+            if not df_editado.equals(st.session_state[nombre_df]):
+                st.session_state[nombre_df] = df_editado
 
-            # Reordenar el DataFrame antes de mostrarlo
-            df_ordenado = st.session_state.df_ganaderia[columnas_base]
-            st.dataframe(df_ordenado)
-                        
-            st.markdown("---")
-            st.markdown("## Base Forrajera")
-            st.markdown("_Para todas las actividades ganaderas y tambo_")
+        # Cría
+        st.subheader("Cría")
+        mostrar_editor_dataframe(
+            "df_cria", "df_cria_editor",
+            pd.DataFrame(0.0, index=["Propias", "De Terceros", "Gasto Directo (US$/cab)", "Gasto Comercial (US$/cab)"],
+                        columns=["Vacas", "Vaquillonas", "Terneros/as", "Toros"])
+        )
+        mostrar_editor_dataframe(
+            "indices_cria", "indices_cria_editor",
+            pd.DataFrame({"\u00cdtem": ["% Preñez", "% Parición", "% Destete"], "Valor": [0.0, 0.0, 0.0]})
+        )
 
-            col1 = st.columns(1)
-            
-            pasturas = st.number_input("**Superficie de pasturas en producción (Has)**",min_value=0.0,
-                step=0.1,key="pasturas")
+        st.markdown("---")
 
-            verdeos = st.number_input("**Superficie de verdeos (invierno y verano) (Has)**",min_value=0.0,
-                step=0.1,key="verdeos")
+        # Invernada
+        st.subheader("Invernada")
+        mostrar_editor_dataframe(
+            "df_invernada", "df_invernada_editor",
+            pd.DataFrame(0.0, index=["Propias", "De Terceros", "Gasto Directo (US$/cab)", "Gasto Comercial (US$/cab)"],
+                        columns=["Novillos", "Novillitos", "Vacas Descarte", "Vaquillonas"])
+        )
+        mostrar_editor_dataframe(
+            "indices_invernada", "indices_invernada_editor",
+            pd.DataFrame({"\u00cdtem": ["Compras (cabezas/año)", "Ventas (cabezas/año)", "Peso Promedio Compras", "Peso Promedio Ventas"],
+                        "Valor": [0.0, 0.0, 0.0, 0.0]})
+        )
 
-            natural = st.number_input("**Superficie de campo natural (Has)**",min_value=0.0,
-                step=0.1,key="natural")
+        st.markdown("---")
 
-            total_superficie = pasturas + verdeos + natural
-            st.markdown(f"**Total de superficie ganadera:** {total_superficie:.2f} Has")
+        # Feedlot
+        st.subheader("Feedlot")
+        mostrar_editor_dataframe(
+            "df_feedlot", "df_feedlot_editor",
+            pd.DataFrame(0.0, index=["Propias", "De Terceros", "Gasto Directo (US$/cab)", "Gasto Comercial (US$/cab)"],
+                        columns=["Novillos", "Novillitos", "Vacas Descarte", "Vaquillonas"])
+        )
+        mostrar_editor_dataframe(
+            "indices_feedlot", "indices_feedlot_editor",
+            pd.DataFrame({"\u00cdtem": ["Compras (cabezas/año)", "Ventas (cabezas/año)", "Peso Promedio Compras", "Peso Promedio Ventas"],
+                        "Valor": [0.0, 0.0, 0.0, 0.0]})
+        )
 
-            # Guardamos en dataframe
-            df_base_forrajera = pd.DataFrame({
-                "Categoría": ["Pasturas en producción", "Verdeos (inv/ver)", "Campo natural", "Total"],
-                "Has": [pasturas, verdeos, natural, total_superficie]
+        st.markdown("---")
+
+        # Tambo
+        st.subheader("Tambo")
+        mostrar_editor_dataframe(
+            "df_tambo", "df_tambo_editor",
+            pd.DataFrame(0.0, index=["Propias", "De Terceros", "Gasto Directo (US$/cab)", "Gasto Comercial (US$/cab)"],
+                        columns=["Vacas (VO+VS)", "Vaquillonas", "Terneras", "Terneros", "Toros"])
+        )
+        mostrar_editor_dataframe(
+            "indices_tambo", "indices_tambo_editor",
+            pd.DataFrame({"\u00cdtem": ["Lt/día", "Precio US$/Lt", "% VO", "% Grasa Butirosa"], "Valor": [0.0, 0.0, 0.0, 0.0]})
+        )
+
+        st.markdown("---")
+
+        # Base Forrajera
+        st.subheader("Base Forrajera")
+        mostrar_editor_dataframe(
+            "df_base_forrajera", "base_forrajera_editor",
+            pd.DataFrame({"Categoria": ["Alfalfa", "Sorgo", "Maíz", "Pastura Natural"], "Has": [0.0]*4})
+        )
+
+        st.markdown("---")
+
+        # Hacienda de terceros
+        st.subheader("Hacienda de terceros")
+        mostrar_editor_dataframe(
+            "df_hacienda", "df_hacienda_editor",
+            pd.DataFrame({
+                "Categoría": ["Novillos", "Vacas", "Vaquillonas", "Terneros", "Terneras", "Total"],
+                "Cantidad": [0]*6,
+                "Pastoreo o capitalización (Precio o % Propio)": [0.0]*6
             })
+        )
 
-            st.dataframe(df_base_forrajera)
-            # Guardamos en dataframe
-            df_base_forrajera = pd.DataFrame({
-                "Categoría": ["Pasturas en producción", "Verdeos (inv/ver)", "Campo natural", "Total"],
-                "Has": [pasturas, verdeos, natural, total_superficie]
-            })
+        st.markdown("---")
 
-            
+        # Otras Actividades
+        st.subheader("Otras Actividades")
+        mostrar_editor_dataframe(
+            "df_otros", "df_otros_editor",
+            pd.DataFrame({"Descripción": ["Sin especificar"]})
+        )
 
-            # ✅ Guardar en session_state
-            st.session_state.df_base_forrajera = df_base_forrajera
+        st.markdown("---")
 
-            st.markdown("---")
+        # Botón para confirmar guardado del bloque completo de Ganadería
+        if st.button("💾 Guardar todo el bloque de Ganadería", key="guardar_bloque_ganaderia"):
+            st.success("✅ Todo el bloque de Ganadería fue guardado correctamente.")
 
-            st.markdown("## Hacienda de Terceros en Campo Propio")
 
-            categorias = ["Novillos", "Vacas", "Vaquillonas", "Terneros", "Terneras"]
-            datos_hacienda = []
-
-            for categoria in categorias:
-                col1, col2 = st.columns(2)
-                with col1:
-                    cantidad = st.number_input(f"{categoria} - Cantidad", min_value=0, step=1, key=f"{categoria}_cant")
-                with col2:
-                    capitalizacion = st.number_input(
-                        f"{categoria} - Pastoreo o capitalización",
-                        min_value=0.0,
-                        step=0.1,
-                        help="Indicar precio o % propio",
-                        key=f"{categoria}_cap"
-                    )
-                datos_hacienda.append([categoria, cantidad, capitalizacion])
-
-            # Creamos el DataFrame
-            df_hacienda = pd.DataFrame(datos_hacienda, columns=["Categoría", "Cantidad", "Pastoreo o capitalización"])
-            total_cabezas = df_hacienda["Cantidad"].sum()
-            df_hacienda.loc[len(df_hacienda.index)] = ["Total", total_cabezas, ""]
-
-            st.markdown(f"**Total:** {total_cabezas} cabezas")
-
-            st.dataframe(df_hacienda)
-
-            # Creamos el DataFrame
-            df_hacienda = pd.DataFrame(datos_hacienda, columns=["Categoría", "Cantidad", "Pastoreo o capitalización"])
-            total_cabezas = df_hacienda["Cantidad"].sum()
-            df_hacienda.loc[len(df_hacienda.index)] = ["Total", total_cabezas, ""]
-
-            st.markdown(f"**Total:** {total_cabezas} cabezas")
-
-            
-
-            # ✅ Guardar en session_state
-            st.session_state.df_hacienda = df_hacienda
-
-            st.markdown("---")
-
-            st.markdown("## Otras Actividades")
-            st.markdown("_Especificar ingresos anuales_")
-            otros_ingresos = st.text_area("Ingresos anuales (descripción)", key="otros_ingresos")
-
-            # Guardamos en DataFrame
-            df_otros = pd.DataFrame({
-                "Descripción": [otros_ingresos] if otros_ingresos else ["Sin especificar"]
-            })
-
-            st.dataframe(df_otros)
-
-            # Guardamos en DataFrame
-            df_otros = pd.DataFrame({
-                "Descripción": [otros_ingresos] if otros_ingresos else ["Sin especificar"]
-            })
-
-            
-
-            # ✅ Guardar en session_state
-            st.session_state.df_otros = df_otros
-    pass
+        
 
 
 
-# Intenta aplanar el diccionario, si hay errores se puede ajustar por sección
-try:
-    df_respuestas = json_normalize(respuestas, sep=".")
-except Exception as e:
-    df_respuestas = pd.DataFrame([{"Error al procesar 'respuestas'": str(e)}])
-# ---- Exportar hoja: Información General ----
-if respuestas:
-    df_info_general = pd.DataFrame([respuestas])  # dict -> DataFrame de una fila
-else:
-    df_info_general = pd.DataFrame(columns=[
-        "Razón Social / Nombre y apellido", "Fecha de Inscripción en IGJ", "CUIT", "Teléfono",
-        "Calle (real y legal)", "Número (real y legal)", "CP (real y legal)",
-        "Provincia (real y legal)", "Localidad (real y legal)",
-        "Calle (comercial)", "Número (comercial)", "CP (comercial)",
-        "Provincia (comercial)", "Localidad (comercial)",
-        "Calle (constituido)", "Número (constituido)", "CP (constituido)",
-        "Provincia (constituido)", "Localidad (constituido)", "Electrónico (constituido)",
-        "Página web empresarial", "E-mail", 
-        "Cantidad de empleados declarados al cierre del último ejercicio",
-        "Código de la actividad principal (AFIP según CLAE)",
-        "Descripción de la actividad principal (AFIP según CLAE)",
-        "Condición de IIBB", "Condición de ganancias", "N° de IIBB", "Sede de IIBB",
-        "Apellido y Nombre ", "Cargo ", "TEL / CEL ", "Mail ",
-        "Reseña Empresa", "Destino de los fondos"
-    ])
 
 
-# ---- Exportar hoja: Avales y Contragarantías ----
-if "avales" in st.session_state and st.session_state.avales:
-    df_avales = pd.DataFrame(st.session_state.avales)
-    df_avales["Total solicitado"] = sum([a.get("Monto", 0) for a in st.session_state.avales])
-else:
-    df_avales = pd.DataFrame(columns=[
-        "Tipo Aval", "Detalle Aval", "Monto", "Tipo Contragarantía", "Detalle Contragarantía", "Total solicitado"
-    ])
 
-# Inmuebles y rodados
-if "inmuebles" in st.session_state:
-    st.session_state.df_inmuebles = pd.DataFrame(st.session_state.inmuebles)
 
-if "rodados" in st.session_state:
-    st.session_state.df_rodados = pd.DataFrame(st.session_state.rodados)
 
-# Deudas
-if "deudas_comerciales" in st.session_state:
-    st.session_state.deudas_com_df = pd.DataFrame(st.session_state.deudas_comerciales)
-
-if "mercado" in st.session_state:
-    st.session_state.mercado_df = pd.DataFrame(st.session_state.mercado)
-
-if "bancos" in st.session_state:
-    st.session_state.bancos_df = pd.DataFrame(st.session_state.bancos)
-    
-# 🧪 Crear el archivo Excel en memoria
+# === BLOQUE EXPORTACIÓN COMPLETA ===
 output = io.BytesIO()
 
-if "bancos_df" in st.session_state and not st.session_state.bancos_df.empty:
-    bancos_df = st.session_state.bancos_df
-else:
-    bancos_df = pd.DataFrame([{
-        "Entidad": "",
-        "Saldo Préstamos Amortizables": 0,
-        "Garantía (*)": "",
-        "Valor de la Cuota": 0,
-        "Régimen de Amortización (**)": "",
-        "Cantidad Cuotas Faltantes": 0,
-        "Descuento de Cheques Utilizado": 0,
-        "Adelanto en Cta Cte Utilizado": 0,
-        "Avales SGR": 0,
-        "Tarjeta de Crédito Utilizado": 0,
-        "Leasing Utilizado": 0,
-        "Impo/Expo Utilizado": 0,
-        "Tasa Promedio $": 0.0,
-        "Tasa Promedio USD": 0.0,
-        "Tipo de Moneda": "",
-        "Total por Banco": 0.0
-    }])
+# Convertir Agricultura por campaña en único DataFrame usando los nombres personalizados
+campanias_fijas = {
+    "actual": "ej 24/25",
+    "hace_1": "ej 23/24",
+    "hace_2": "ej 22/23"
+}
+nombres_visibles = st.session_state.get("nombres_visibles_campanias", {})
 
-if "mercado_df" in st.session_state and not st.session_state.mercado_df.empty:
-    mercado_df = st.session_state.mercado_df
-else:
-    mercado_df = pd.DataFrame([{
-        "Obligaciones Negociables": 0,
-        "Descuento de Cheques Propios": 0,
-        "Pagaré Bursátil": 0,
-        "Organismos Multilaterales (CFI)": 0,
-        "Otros (1)": 0,
-        "Otros (2)": 0,
-        "Tasa Promedio $": 0.0,
-        "Tasa Promedio USD": 0.0,
-        "Tipo de Moneda": "",
-        "Total": 0.0
-    }])
+df_agricultura_total = []
 
-if "deudas_com_df" in st.session_state and not st.session_state.deudas_com_df.empty:
-    deudas_com_df = st.session_state.deudas_com_df
-else:
-    deudas_com_df = pd.DataFrame([{
-        "A favor de": "",
-        "Tipo de Moneda": "",
-        "Monto": 0.0,
-        "Garantía": "",
-        "Tasa": 0.0,
-        "Plazo (días)": 0
-    }])
+for clave_logica, clave_real in campanias_fijas.items():
+    df = st.session_state.get("agricultura_por_campania", {}).get(clave_real)
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        nombre_visible = nombres_visibles.get(clave_logica, clave_real)
+        df_temp = df.copy()
+        df_temp.insert(0, "Campaña", nombre_visible)
+        df_agricultura_total.append(df_temp)
 
-planes_dict = st.session_state.get("planes_guardados_por_actividad", {})
+df_agricultura = pd.concat(df_agricultura_total, ignore_index=True) if df_agricultura_total else pd.DataFrame()
+
+# Convertir planes de ventas por actividad en Ganadería a un DataFrame
+df_ganaderia = pd.DataFrame()
+if "planes_guardados_por_actividad" in st.session_state and "Ganadería" in st.session_state.planes_guardados_por_actividad:
+    df_ganaderia = st.session_state.planes_guardados_por_actividad["Ganadería"]
+
+# Crear helper
+def crear_df(contenido, columnas):
+    if isinstance(contenido, pd.DataFrame):
+        return contenido if not contenido.empty else pd.DataFrame(columns=columnas)
+    elif contenido:
+        return pd.DataFrame(contenido)
+    else:
+        return pd.DataFrame(columns=columnas)
+
+# Respuestas
+respuestas = st.session_state.get("respuestas", {})
+df_respuestas = pd.json_normalize(respuestas, sep=".") if respuestas else pd.DataFrame()
+df_info_general = pd.DataFrame([respuestas]) if respuestas else pd.DataFrame()
 
 
-if "df_inmuebles" in st.session_state and not st.session_state.df_inmuebles.empty:
-    df_inmuebles = st.session_state.df_inmuebles
-else:
-    df_inmuebles = pd.DataFrame([{
-        "Tipo": "", "Dirección": "", "Provincia": "", "Destino": "",
-        "m2/has": 0, "Valor Fiscal": 0, "Valor Mercado": 0
-    }])
-if "df_rodados" in st.session_state and not st.session_state.df_rodados.empty:
-    df_rodados = st.session_state.df_rodados
-else:
-    df_rodados = pd.DataFrame([{
-        "Tipo": "", "Marca": "", "Valor Fiscal": 0, "Valor Mercado": 0
-    }])
-# Campos
-if "campos_propios" in st.session_state and st.session_state.campos_propios:
-    df_campo_propio = pd.DataFrame(st.session_state.campos_propios)
-else:
-    df_campo_propio = pd.DataFrame([{
-        "Provincia": "", "Partido": "", "Localidad": "", "Nombre del Campo": "",
-        "Superficie (has)": 0, "Titularidad": "", "Tipo de Tenencia": ""
-    }])
+# Hojas reales
+df_avales = crear_df(st.session_state.get("avales", []), ["Tipo Aval", "Detalle Aval", "Monto", "Tipo Contragarantía", "Detalle Contragarantía"])
+if not df_avales.empty:
+    df_avales["Total solicitado"] = df_avales["Monto"].sum()
 
-if "campos_arrendados" in st.session_state and st.session_state.campos_arrendados:
-    df_campo_arrendado = pd.DataFrame(st.session_state.campos_arrendados)
-else:
-    df_campo_arrendado = pd.DataFrame([{
-        "Provincia": "", "Partido": "", "Localidad": "", "Nombre del Campo": "",
-        "Superficie (has)": 0, "Titularidad": "", "Tipo de Tenencia": ""
-    }])
-if "df_agricultura_total" in st.session_state and not st.session_state.df_agricultura_total.empty:
-    df_agricultura_suma_total = pd.DataFrame(st.session_state.df_agricultura_total)
-else:
-    df_agricultura_suma_total = pd.DataFrame([{
-        "Campaña": "", "Cultivo": "", "Otro Cultivo": "",
-        "Has p/adm": 0, "Has a %": 0, "% Propio": 0,
-        "Rendimiento (tn/ha)": 0, "Gastos Comerc. y Cosecha (US$/ha)": 0,
-        "Gastos Directos (US$/ha)": 0, "Stock actual (tn)": 0, "Precio Actual/Futuro (US$/tn)": 0
-    }])
+df_filiatorios = crear_df(st.session_state.get("filiatorios", []), ["Nombre y Apellido", "CUIT / CUIL", "Cargo", "% Participación", "Estado Civil", "Nombre Cónyuge", "Fiador"])
+df_empresas_controlantes = crear_df(st.session_state.get("empresas_controlantes", []), ["Razón Social", "CUIT", "% de Participación", "Código de la actividad principal"])
+df_empresas_vinculadas = crear_df(st.session_state.get("empresas_vinculadas", []), ["Razón Social", "CUIT", "% de Participación", "Código de la actividad principal"])
+df_clientes_descontar = crear_df(st.session_state.get("clientes_descontar", []), ["Denominación", "CUIT", "Tipo", "Modalidad de Cobro", "Descuenta de Cheques"])
+df_proveedores = crear_df(st.session_state.get("proveedores", []), ["Denominación", "CUIT", "Teléfono", "Local o Exterior", "Modalidad de Pago", "Plazo en Días", "% Compras"])
+df_clientes = crear_df(st.session_state.get("clientes", []), ["Denominación", "CUIT", "Teléfono", "Local o Exterior", "Modalidad de Pago", "Plazo en Días", "% Ventas"])
+df_competidores = crear_df(st.session_state.get("competidores", []), ["Denominación", "CUIT", "Teléfono", "Segmento", "Participacion del Mercado %", "Condiciones de ventas"])
+df_referencias_bancarias = crear_df(st.session_state.get("referencias_bancarias", []), ["Entidad Financiera", "Contacto", "Sucursal", "Tel", "Mail"])
+df_bancos = crear_df(st.session_state.get("bancos", []), [
+    "Entidad", "Saldo Préstamos Amortizables", "Garantía (*)", "Valor de la Cuota",
+    "Régimen de Amortización (**)", "Cantidad Cuotas Faltantes", "Descuento de Cheques Utilizado",
+    "Adelanto en Cta Cte Utilizado", "Avales SGR", "Tarjeta de Crédito Utilizado", "Leasing Utilizado",
+    "Impo/Expo Utilizado", "Tasa Promedio $", "Tasa Promedio USD", "Tipo de Moneda"
+])
+df_mercado = crear_df(st.session_state.get("mercado", []), [
+    "Obligaciones Negociables", "Descuento de Cheques Propios", "Pagaré Bursátil",
+    "Organismos Multilaterales (CFI)", "Otros (1)", "Otros (2)", "Tasa Promedio $",
+    "Tasa Promedio USD", "Tipo de Moneda"
+])
+df_deudas_com = crear_df(st.session_state.get("deudas_comerciales", []), ["A favor de", "Tipo de Moneda", "Monto", "Garantía", "Tasa", "Plazo (días)"])
+df_ventas_interno = crear_df(st.session_state.get("ventas_interno", []), ["Mes", "Tipo", "Subtipo", "Año en curso", "Año 1", "Año 2", "Año 3"])
+df_ventas_externo = crear_df(st.session_state.get("ventas_externo", []), ["Mes", "Tipo", "Subtipo", "Año en curso", "Año 1", "Año 2", "Año 3", "Región"])
+df_compras = crear_df(st.session_state.get("compras", []), ["Mes", "Tipo", "Subtipo", "Año en curso", "Año 1", "Año 2", "Año 3"])
+df_campos_propios = crear_df(st.session_state.get("df_campos", []), ["Nombre del Campo", "Provincia", "Partido", "Localidad", "Titularidad", "Has", "Valor U$/ha", "Has Hipotecadas", "Estado Actual"])
+df_campos_arrendados = crear_df(st.session_state.get("df_campos_arrendados", []), ["Nombre del Campo", "Provincia", "Partido", "Localidad", "Arrendador", "Has Arrendadas", "Valor U$/ha", "Metodología de Pago", "Duración del Contrato"])
+
+df_base_forrajera = crear_df(st.session_state.get("df_base_forrajera", []), ["Categoria", "Has"])
+
+df_hacienda = crear_df(st.session_state.get("df_hacienda", []), ["Categoria", "Cantidad de Cabezas", "Pastoreo o capitalización"])
+df_otros = crear_df(st.session_state.get("df_otros", []), ["Descripción"])
+
+def dict_a_texto(tabla):
+    """Convierte una lista de dicts en texto concatenado por filas"""
+    if isinstance(tabla, list) and tabla:
+        return "\n".join([", ".join([f"{k}: {v}" for k, v in fila.items()]) for fila in tabla])
+    return ""
+
+dict_final_tab0 = st.session_state.get("respuestas", {}).copy()
+
+# Agregar las tablas resumidas como texto (una sola celda por tabla)
+dict_final_tab0["Resumen Avales"] = dict_a_texto(st.session_state.get("avales", []))
+dict_final_tab0["Resumen Filiatorios"] = dict_a_texto(st.session_state.get("filiatorios", []))
+dict_final_tab0["Resumen Empresas Controlantes"] = dict_a_texto(st.session_state.get("empresas_controlantes", []))
+dict_final_tab0["Resumen Empresas Vinculadas"] = dict_a_texto(st.session_state.get("empresas_vinculadas", []))
+dict_final_tab0["Resumen Clientes a Descontar"] = dict_a_texto(st.session_state.get("clientes_descontar", []))
+dict_final_tab0["Resumen Proveedores"] = dict_a_texto(st.session_state.get("proveedores", []))
+dict_final_tab0["Resumen Clientes"] = dict_a_texto(st.session_state.get("clientes", []))
+dict_final_tab0["Resumen Competidores"] = dict_a_texto(st.session_state.get("competidores", []))
+dict_final_tab0["Resumen Referencias Bancarias"] = dict_a_texto(st.session_state.get("referencias_bancarias", []))
+
+# Convertir en DataFrame de una sola fila
+df_info_general_unificado = json_normalize(dict_final_tab0, sep=".")
 
 
-df_ganaderia = st.session_state.df_ganaderia
-if "df_base_forrajera" in st.session_state:
-    df_base_forrajera = pd.DataFrame(st.session_state.df_base_forrajera)
-else:
-    df_base_forrajera = pd.DataFrame([{
-            "Categoria": "", "Has": 0
-        }])
-if "df_hacienda" in st.session_state:
-    df_hacienda = pd.DataFrame(st.session_state.df_hacienda)
-else:
-    df_hacienda = pd.DataFrame([{
-        "Categoria": "", "Cantidad de Cabezas": 0,
-        "Pastoreo o capitalización": 0.0
-    }])
-if "df_otros" in st.session_state:
-    df_otros = pd.DataFrame(st.session_state.df_otros)
-else:
-    df_otros = pd.DataFrame([{
-            "Descripción": ""
-        }])
-    
-# === BLOQUE DE ASIGNACIONES FALTANTES PARA EXPORTAR CORRECTAMENTE ===
-if "filiatorios" in st.session_state:
-    st.session_state.df_filiatorios = pd.DataFrame(st.session_state.filiatorios)
+# --- Plan de Ventas por Actividad ---
+df_planes_ventas_actividad = []
 
-if "clientes_a_descontar" in st.session_state:
-    st.session_state.df_clientes_a_descontar = pd.DataFrame(st.session_state.clientes_a_descontar)
+for actividad, df in st.session_state.get("planes_guardados_por_actividad", {}).items():
+    if isinstance(df, pd.DataFrame):
+        df_temp = df.copy()
+        df_temp.insert(0, "Actividad", actividad)
+        df_planes_ventas_actividad.append(df_temp)
 
-if "ingresos_egresos" in st.session_state:
-    st.session_state.df_ingresos_y_egresos = pd.DataFrame(st.session_state.ingresos_egresos)
+df_planes_ventas = pd.concat(df_planes_ventas_actividad, ignore_index=True) if df_planes_ventas_actividad else pd.DataFrame()
 
-if "ventas_interno" in st.session_state:
-    st.session_state.df_ventas_interno = pd.DataFrame(st.session_state.ventas_interno)
 
-if "ventas_externo" in st.session_state:
-    st.session_state.df_ventas_externo = pd.DataFrame(st.session_state.ventas_externo)
 
-if "campos_propios" in st.session_state:
-    st.session_state.df_campos_propios = pd.DataFrame(st.session_state.campos_propios)
+# === Exportar Índices de Ganadería con chequeo robusto ===
+def exportar_indices(nombre_df, nombre_hoja, columnas=["Ítem", "Valor"]):
+    df = st.session_state.get(nombre_df)
+    if isinstance(df, pd.DataFrame) and not df.dropna(how="all").empty:
+        df = df.reset_index(drop=True)
+        df.to_excel(writer, sheet_name=nombre_hoja, index=False)
+    else:
+        pd.DataFrame(columns=columnas).to_excel(writer, sheet_name=nombre_hoja, index=False)
+# Nuevos bloques que faltan exportar
+df_cria = crear_df(st.session_state.get("df_cria", []), ["Vacas", "Vaquillonas", "Terneros/as", "Toros"])
+df_indices_cria = crear_df(st.session_state.get("df_indices_cria", []), ["Índice", "Valor"])
+df_invernada = crear_df(st.session_state.get("df_invernada", []), ["Novillos", "Novillitos", "Vacas Descarte", "Vaquillonas"])
+df_indices_invernada = crear_df(st.session_state.get("df_indices_invernada", []), ["Ítem", "Valor"])
+df_feedlot = crear_df(st.session_state.get("df_feedlot", []), ["Novillos", "Novillitos", "Vacas Descarte", "Vaquillonas"])
+df_indices_feedlot = crear_df(st.session_state.get("df_indices_feedlot", []), ["Ítem", "Valor"])
+df_tambo = crear_df(st.session_state.get("df_tambo", []), ["Vacas (VO+VS)", "Vaquillonas", "Terneras", "Terneros", "Toros"])
+df_indices_tambo = crear_df(st.session_state.get("df_indices_tambo", []), ["Ítem", "Valor"])
 
-if "campos_arrendados" in st.session_state:
-    st.session_state.df_campos_arrendados = pd.DataFrame(st.session_state.campos_arrendados)
-
-#if "df_ganaderia" in st.session_state:
-    #st.session_state.df_ganadería = st.session_state.df_ganaderia
-
-if "df_hacienda" in st.session_state:
-    st.session_state.df_hacienda_de_terceros = st.session_state.df_hacienda
-
-if "df_otros" in st.session_state:
-    st.session_state.df_otras_actividades = st.session_state.df_otros
-
+# Guardar a Excel
 with pd.ExcelWriter(output, engine="openpyxl") as writer:
-    df_respuestas.to_excel(writer, sheet_name="Respuestas", index=False)
-    df_info_general.to_excel(writer, sheet_name="Info General", index=False)
+    #df_respuestas.to_excel(writer, sheet_name="Respuestas", index=False)
+    #df_info_general.to_excel(writer, sheet_name="Respuestas Simples", index=False)
+    df_info_general_unificado.to_excel(writer, sheet_name="Resumen Info General", index=False)
     df_avales.to_excel(writer, sheet_name="Avales", index=False)
-    df_filiarorio.to_excel(writer, sheet_name="Filiatorios", index=False)
+    df_filiatorios.to_excel(writer, sheet_name="Filiatorios", index=False)
     df_empresas_controlantes.to_excel(writer, sheet_name="Empresas Controlantes", index=False)
     df_empresas_vinculadas.to_excel(writer, sheet_name="Empresas Vinculadas", index=False)
     df_clientes_descontar.to_excel(writer, sheet_name="Clientes a Descontar", index=False)
@@ -2679,45 +1736,40 @@ with pd.ExcelWriter(output, engine="openpyxl") as writer:
     df_competidores.to_excel(writer, sheet_name="Competidores", index=False)
     df_referencias_bancarias.to_excel(writer, sheet_name="Referencias Bancarias", index=False)
 
-    
-    
-    bancos_df.to_excel(writer, sheet_name="Deuda Bancaria", index=False)
-    mercado_df.to_excel(writer, sheet_name="Deuda Mercado", index=False)
-    deudas_com_df.to_excel(writer, sheet_name="Deuda Comercial", index=False)
+    df_bancos.to_excel(writer, sheet_name="Deuda Bancaria", index=False)
+    df_mercado.to_excel(writer, sheet_name="Deuda Mercado", index=False)
+    df_deudas_com.to_excel(writer, sheet_name="Deuda Comercial", index=False)
 
-    df_interno.to_excel(writer, sheet_name="Ventas Interno", index=False)
-    df_externo.to_excel(writer, sheet_name="Ventas Externo", index=False)
+    df_ventas_interno.to_excel(writer, sheet_name="Ventas Interno", index=False)
+    df_ventas_externo.to_excel(writer, sheet_name="Ventas Externo", index=False)
     df_compras.to_excel(writer, sheet_name="Compras", index=False)
+    df_planes_ventas.to_excel(writer, sheet_name="Plan Ventas Actividad", index=False)
 
-    df_activo_resumen.to_excel(writer, sheet_name="Activo Resumen", index=False)
-    df_inmuebles.to_excel(writer, sheet_name="Inmuebles", index=False)
-    df_rodados.to_excel(writer, sheet_name="Rodados", index=False)
-    df_pasivo.to_excel(writer, sheet_name="Pasivo", index=False)
-    df_ingresos_egresos.to_excel(writer, sheet_name="Ingresos y Egresos", index=False)
-
-    df_campo_propio.to_excel(writer, sheet_name="Campos Propios", index=False)
-    df_campo_arrendado.to_excel(writer, sheet_name="Campos Arrendados", index=False)
-    
-    df_agricultura_suma_total.to_excel(writer, sheet_name="Agricultura", index=False)
-    
+    df_campos_propios.to_excel(writer, sheet_name="Campos Propios", index=False)
+    df_campos_arrendados.to_excel(writer, sheet_name="Campos Arrendados", index=False)
+    df_agricultura.to_excel(writer, sheet_name="Agricultura", index=False)
     df_ganaderia.to_excel(writer, sheet_name="Ganadería", index=False)
-    
     df_base_forrajera.to_excel(writer, sheet_name="Base Forrajera", index=False)
-    
     df_hacienda.to_excel(writer, sheet_name="Hacienda de Terceros", index=False)
-    
     df_otros.to_excel(writer, sheet_name="Otras Actividades", index=False)
 
+    # === En bloque de exportación de Excel ===
+    df_cria.to_excel(writer, sheet_name="Cría", index=True)
+    df_invernada.to_excel(writer, sheet_name="Invernada", index=True)
+    df_feedlot.to_excel(writer, sheet_name="Feedlot", index=True)
+    df_tambo.to_excel(writer, sheet_name="Tambo", index=True)
+
+    exportar_indices("indices_cria", "Índices Cría")
+    exportar_indices("indices_invernada", "Índices Invernada")
+    exportar_indices("indices_feedlot", "Índices Feedlot")
+    exportar_indices("indices_tambo", "Índices Tambo")
+
+    
 output.seek(0)
 
-
-
-col1, col2, col3 = st.columns([1, 1, 1])
-
-with col1:
-    if st.button("**💾 Guardar progreso para continuar luego**"):
+with st.sidebar:
+    if st.button("💾 Guardar progreso para continuar luego"):
         try:
-            # Función para filtrar claves problemáticas
             def clave_permitida(k):
                 return not (
                     k.startswith("delete_")
@@ -2725,81 +1777,32 @@ with col1:
                     or k.startswith("FormSubmitter:")
                     or "Agregar Cultivo" in k
                 )
-
             estado_a_guardar = {
                 k: v for k, v in st.session_state.items() if clave_permitida(k)
             }
-
             with open(PROGRESO_FILE, "wb") as f:
                 pickle.dump(estado_a_guardar, f)
-
             st.success("✅ Progreso guardado correctamente.")
         except Exception as e:
             st.error(f"❌ Error al guardar el progreso: {e}")
 
-with col2:
-    # ⬇️ Botón para descargar
-    st.download_button(
-        label="**⬇️ Descargar Archivo para compartir a QTM Capital**",
+    descargado = st.download_button(
+        label="📥 Descargar archivo para compartir a QTM",
         data=output,
-        file_name="formulario_completo.xlsx",
+        file_name=f"formulario_{codigo_usuario}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    ) 
+    )
 
+    if descargado:
+        st.session_state["descarga_confirmada"] = True
+        st.rerun()  # <<--- ESTA LÍNEA ES LA CLAVE
 
-with col3:
-    if st.button("**❌ Borrar todo lo ya cargado**"):
-        # Guardamos una copia del estado original por si cancela
-        st.session_state.estado_anterior = copy.deepcopy(st.session_state)
-        st.session_state.confirmar_borrado = True
-
-
-
-# === Confirmación del borrado ===
-if st.session_state.get("confirmar_borrado", False):
-    st.warning("⚠️ ¿Estás seguro de que querés borrar todo lo cargado?")
-
-    col_borrar, col_cancelar = st.columns(2)
-
-    with col_borrar:
-        if st.button("**❌ Confirmar Borrado**"):
-            # Claves a preservar si necesitás mantener algo
-            claves_a_preservar = ["autenticado"]
-            claves_preservadas = {
-                k: st.session_state[k]
-                for k in claves_a_preservar if k in st.session_state
-            }
-
-            # Borrar archivo de progreso si existe
-            if os.path.exists(PROGRESO_FILE):
+    # Opción para borrar el progreso actual
+    if os.path.exists(PROGRESO_FILE):
+        if st.button(f"❌ Borrar progreso guardado para {codigo_usuario}"):
+            try:
                 os.remove(PROGRESO_FILE)
-
-            # Limpiar todo el session_state
-            st.session_state.clear()
-
-            # Restaurar claves preservadas
-            for k, v in claves_preservadas.items():
-                st.session_state[k] = v
-
-            # Mostrar advertencia para refrescar
-            st.markdown("#####¡Todo fue borrado!")
-            st.warning("🚨 **IMPORTANTE:** Refrescá la página (F5 o Ctrl+R) para ver el formulario completamente vacío.")
-            st.stop()  
-
-    with col_cancelar:
-        if st.button("**🚫 Volver al Inicio**"):
-            # Restauramos estado anterior
-            estado_restaurado = st.session_state.get("estado_anterior", {})
-            preservar = {}
-            for clave in ["autenticado"]:
-                if clave in st.session_state:
-                    preservar[clave] = st.session_state[clave]
-
-            st.session_state.clear()
-            for k, v in estado_restaurado.items():
-                st.session_state[k] = v
-            for k, v in preservar.items():
-                st.session_state[k] = v
-
-            st.session_state.confirmar_borrado = False
-            st.rerun()
+                st.success("✅ Progreso eliminado. Refrescá la página para comenzar desde cero.")
+                st.stop()
+            except Exception as e:
+                st.error(f"❌ Error al intentar borrar el progreso: {e}")
