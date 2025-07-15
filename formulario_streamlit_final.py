@@ -196,6 +196,8 @@ with tabs[0]:
             fecha_igj = st.date_input(
                 "Fecha de Inscripción en IGJ",
                 value=valor_actual,
+                min_value=datetime.date(1880, 1, 1),
+                max_value=datetime.date.today(),
                 key="fecha_igj",
                 format="YYYY-MM-DD"
             )
