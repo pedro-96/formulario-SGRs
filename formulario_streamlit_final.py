@@ -102,10 +102,11 @@ if st.session_state.get("descarga_confirmada", False):
                 st.error(f"❌ Error al borrar el archivo: {e}")
     with col2:
         if st.button("**⬅️ Seguir cargando el formulario**"):
+            # 🔁 Al volver a cargar, marcamos como no identificado para forzar la recarga del pkl
             st.session_state["descarga_confirmada"] = False
+            st.session_state["formulario_identificado"] = False 
             st.rerun()
 
-    # IMPORTANTE: cortar la ejecución del resto del formulario
     st.stop()
 
 # Crear Tabs principales 
