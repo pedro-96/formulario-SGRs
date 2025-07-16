@@ -192,16 +192,19 @@ with tabs[0]:
                 except:
                     valor_actual = datetime.date.today()
 
-            # Mostrar selector de fecha con valor controlado
+            if "fecha_igj" not in st.session_state:
+                st.session_state.fecha_igj = datetime.date.today()
+
             fecha_igj = st.date_input(
                 "Fecha de Inscripción en IGJ",
-                value=valor_actual,
+                key="fecha_igj",
                 min_value=datetime.date(1880, 1, 1),
                 max_value=datetime.date.today(),
-                key="fecha_igj",
                 format="YYYY-MM-DD"
             )
 
+            st.session_state.respuestas["Fecha de Inscripción en IGJ"] = fecha_igj.strftime("%Y-%m-%d")
+            
             # Guardar como string formateado
             st.session_state.respuestas["Fecha de Inscripción en IGJ"] = fecha_igj.strftime("%Y-%m-%d")
         with col2:
@@ -220,18 +223,20 @@ with tabs[0]:
 
         st.markdown("**Domicilio real y legal**")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.session_state.respuestas["Calle (real y legal)"] = st.text_input("Calle", key="real y legal1")
         with col2:
             st.session_state.respuestas["Número (real y legal)"] = st.text_input("Número", key="real y legal2")
         with col3:
-            st.session_state.respuestas["CP (real y legal)"] = st.text_input("CP", key="real y legal3")
-        
-        col4, col5 = st.columns(2)
+            st.session_state.respuestas["Piso - Depto (real y legal)"] = st.text_input("Piso / Depto", key="real y legal4")
         with col4:
-            prov_real = st.selectbox("Provincia", nombres_provincias, key="prov_real")
+            st.session_state.respuestas["CP (real y legal)"] = st.text_input("CP", key="real y legal3")
+
+        col5, col6 = st.columns(2)
         with col5:
+            prov_real = st.selectbox("Provincia", nombres_provincias, key="prov_real")
+        with col6:
             loc_real = st.selectbox("Localidad", localidades_por_provincia.get(prov_real, []), key="loc_real")
 
         st.session_state.respuestas["Provincia (real y legal)"] = prov_real
@@ -242,18 +247,20 @@ with tabs[0]:
         # --- Domicilio Comercial ---
         st.markdown("**Domicilio comercial**")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.session_state.respuestas["Calle (comercial)"] = st.text_input("Calle", key="comercial1")
         with col2:
             st.session_state.respuestas["Número (comercial)"] = st.text_input("Número", key="comercial2")
         with col3:
+            st.session_state.respuestas["Piso - Depto (comercial)"] = st.text_input("Piso / Depto", key="comercial4")
+        with col4:
             st.session_state.respuestas["CP (comercial)"] = st.text_input("CP", key="comercial3")
 
-        col4, col5 = st.columns(2)
-        with col4:
-            provincia_comercial = st.selectbox("Provincia", [prov["nombre"] for prov in provincias_dicts], key="comercial_prov")
+        col5, col6 = st.columns(2)
         with col5:
+            provincia_comercial = st.selectbox("Provincia", [prov["nombre"] for prov in provincias_dicts], key="comercial_prov")
+        with col6:
             localidad_comercial = st.selectbox("Localidad", localidades_por_provincia.get(provincia_comercial, []), key="comercial_loc")
 
         st.session_state.respuestas["Provincia (comercial)"] = provincia_comercial
@@ -265,18 +272,20 @@ with tabs[0]:
         st.markdown("**Domicilio constituido**")
         st.caption("*(Domicilio declarado para recibir notificaciones, en el ámbito de la capital de la provincia donde se encuentra radicada la empresa, y que será reflejado en el contrato de garantía y de fianza.*")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.session_state.respuestas["Calle (constituido)"] = st.text_input("Calle", key="constituido1")
         with col2:
             st.session_state.respuestas["Número (constituido)"] = st.text_input("Número", key="constituido2")
         with col3:
+            st.session_state.respuestas["Piso - Depto (constituido)"] = st.text_input("Piso / Depto", key="constituido4")
+        with col4:
             st.session_state.respuestas["CP (constituido)"] = st.text_input("CP", key="constituido3")
 
-        col4, col5 = st.columns(2)
-        with col4:
-            provincia_constituido = st.selectbox("Provincia", [prov["nombre"] for prov in provincias_dicts], key="constituido_prov")
+        col5, col6 = st.columns(2)
         with col5:
+            provincia_constituido = st.selectbox("Provincia", [prov["nombre"] for prov in provincias_dicts], key="constituido_prov")
+        with col6:
             localidad_constituido = st.selectbox("Localidad", localidades_por_provincia.get(provincia_constituido, []), key="constituido_loc")
 
         st.session_state.respuestas["Provincia (constituido)"] = provincia_constituido
@@ -1676,21 +1685,25 @@ def dict_a_texto(tabla):
         return "\n".join([", ".join([f"{k}: {v}" for k, v in fila.items()]) for fila in tabla])
     return ""
 
-dict_final_tab0 = st.session_state.get("respuestas", {}).copy()
+# Clonar las respuestas y limpiar claves que tengan "/"
+respuestas_limpias = {
+    k.replace("/", "-").replace("  ", " ").strip(): v
+    for k, v in st.session_state.get("respuestas", {}).items()
+}
 
-# Agregar las tablas resumidas como texto (una sola celda por tabla)
-dict_final_tab0["Resumen Avales"] = dict_a_texto(st.session_state.get("avales", []))
-dict_final_tab0["Resumen Filiatorios"] = dict_a_texto(st.session_state.get("filiatorios", []))
-dict_final_tab0["Resumen Empresas Controlantes"] = dict_a_texto(st.session_state.get("empresas_controlantes", []))
-dict_final_tab0["Resumen Empresas Vinculadas"] = dict_a_texto(st.session_state.get("empresas_vinculadas", []))
-dict_final_tab0["Resumen Clientes a Descontar"] = dict_a_texto(st.session_state.get("clientes_descontar", []))
-dict_final_tab0["Resumen Proveedores"] = dict_a_texto(st.session_state.get("proveedores", []))
-dict_final_tab0["Resumen Clientes"] = dict_a_texto(st.session_state.get("clientes", []))
-dict_final_tab0["Resumen Competidores"] = dict_a_texto(st.session_state.get("competidores", []))
-dict_final_tab0["Resumen Referencias Bancarias"] = dict_a_texto(st.session_state.get("referencias_bancarias", []))
+# Agregar los resúmenes como texto en una sola celda
+respuestas_limpias["Resumen Avales"] = dict_a_texto(st.session_state.get("avales", []))
+respuestas_limpias["Resumen Filiatorios"] = dict_a_texto(st.session_state.get("filiatorios", []))
+respuestas_limpias["Resumen Empresas Controlantes"] = dict_a_texto(st.session_state.get("empresas_controlantes", []))
+respuestas_limpias["Resumen Empresas Vinculadas"] = dict_a_texto(st.session_state.get("empresas_vinculadas", []))
+respuestas_limpias["Resumen Clientes a Descontar"] = dict_a_texto(st.session_state.get("clientes_descontar", []))
+respuestas_limpias["Resumen Proveedores"] = dict_a_texto(st.session_state.get("proveedores", []))
+respuestas_limpias["Resumen Clientes"] = dict_a_texto(st.session_state.get("clientes", []))
+respuestas_limpias["Resumen Competidores"] = dict_a_texto(st.session_state.get("competidores", []))
+respuestas_limpias["Resumen Referencias Bancarias"] = dict_a_texto(st.session_state.get("referencias_bancarias", []))
 
-# Convertir en DataFrame de una sola fila
-df_info_general_unificado = json_normalize(dict_final_tab0, sep=".")
+# Convertir en DataFrame
+df_info_general_unificado = pd.json_normalize(respuestas_limpias, sep=".")
 
 
 # --- Plan de Ventas por Actividad ---
@@ -1723,6 +1736,7 @@ df_feedlot = crear_df(st.session_state.get("df_feedlot", []), ["Novillos", "Novi
 df_indices_feedlot = crear_df(st.session_state.get("df_indices_feedlot", []), ["Ítem", "Valor"])
 df_tambo = crear_df(st.session_state.get("df_tambo", []), ["Vacas (VO+VS)", "Vaquillonas", "Terneras", "Terneros", "Toros"])
 df_indices_tambo = crear_df(st.session_state.get("df_indices_tambo", []), ["Ítem", "Valor"])
+
 
 # Guardar a Excel
 with pd.ExcelWriter(output, engine="openpyxl") as writer:
