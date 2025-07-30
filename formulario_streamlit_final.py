@@ -8,7 +8,10 @@ import os
 import pickle
 import copy
 import datetime
-
+from datetime import date
+from PIL import Image
+from pathlib import Path
+from pandas import json_normalize
 
 # --- Login simple (sin base de datos)
 USUARIO = "QTM"
@@ -32,11 +35,6 @@ if not st.session_state.autenticado:
             else:
                 st.error("Usuario o contraseña incorrectos.")
     st.stop()  # Detiene la ejecución si no está logueado
-
-
-# 🔄 Convertir el diccionario respuestas anidado en una lista de DataFrames
-from pandas import json_normalize
-
 
 # === BLOQUE DE IDENTIFICACIÓN DE FORMULARIO ===
 if "formulario_identificado" not in st.session_state:
@@ -62,15 +60,16 @@ if not st.session_state.formulario_identificado:
         try:
             with open(PROGRESO_FILE, "rb") as f:
                 progreso_guardado = pickle.load(f)
+            # Claves que NO deben restaurarse porque son usadas por widgets como data_editor o botones
+            def es_clave_permitida(k):
+                claves_widget_conflictivas = [
+                    "editor_", "FormSubmitter:", "delete_", "guardar_",
+                    "Agregar", "_", "ventas_interno_", "ventas_externo_", "compras_"
+                ]
+                return not any(k.startswith(prefijo) or k == prefijo for prefijo in claves_widget_conflictivas)
+
             for k, v in progreso_guardado.items():
-                if (
-                    not k.startswith("editor_")
-                    and not k.startswith("FormSubmitter:")
-                    and not k.startswith("delete_")
-                    and not k.startswith("guardar_")
-                    and not k.startswith("_")
-                    and "Agregar" not in k
-                ):
+                if es_clave_permitida(k):
                     if k not in st.session_state:
                         st.session_state[k] = v
             st.success(f"✅ Progreso cargado para el CUIT/CUIL'{PROGRESO_FILE}'.")
@@ -94,12 +93,17 @@ if st.session_state.get("descarga_confirmada", False):
     with col1:
         if st.button("**❌ Borrar progreso para cerrar la sesión**"):
             try:
-                os.remove(PROGRESO_FILE)
+                if os.path.exists(PROGRESO_FILE):
+                    os.remove(PROGRESO_FILE)
+                    st.success("✅ Archivo de progreso eliminado.")
+                else:
+                    st.warning("⚠️ No se encontró el archivo de progreso. Se limpiará igualmente la sesión.")
+
                 st.session_state.clear()
-                st.success("**Progreso eliminado. Podés cerrar esta ventana o recargar para comenzar de nuevo.**")
-                st.stop()
+                st.rerun()
+
             except Exception as e:
-                st.error(f"❌ Error al borrar el archivo: {e}")
+                st.error(f"❌ Error inesperado al intentar limpiar el progreso: {e}")
     with col2:
         if st.button("**⬅️ Seguir cargando el formulario**"):
             # 🔁 Al volver a cargar, marcamos como no identificado para forzar la recarga del pkl
@@ -142,9 +146,6 @@ def seleccionar_provincia_y_localidad(key_prov, key_loc):
 
     return provincia_seleccionada, localidad_seleccionada
 
-from PIL import Image
-from pathlib import Path
-
 # Ruta base: carpeta del script
 base_path = Path(__file__).parent
 
@@ -169,8 +170,7 @@ tabs = st.tabs([
 if "respuestas" not in st.session_state:
     st.session_state.respuestas = {}
 
-# ---- TAB 1: Información General ----
-
+# ---- TAB 0: Información General ----
 with tabs[0]:
     
     # --- BLOQUE COMPLETO para IDENTIFICACION SOCIO/TERCERO PARTICIPE ---
@@ -295,6 +295,10 @@ with tabs[0]:
             "Electrónico",
             help="Correo electrónico asociado a este domicilio constituido", key="constituido6"
         )
+        # Validar "Electrónico (constituido)"
+        email_constituido = st.session_state.respuestas["Electrónico (constituido)"]
+        if email_constituido.strip() and not re.match(r"[^@]+@[^@]+\.[^@]+", email_constituido.strip()):
+            st.warning(" El mail del domicilio constituido no parece válido.")
 
         st.markdown("---")
 
@@ -305,6 +309,11 @@ with tabs[0]:
             st.session_state.respuestas["Página web empresarial"] = st.text_input("Página web empresarial", key="Página web empresarial")
         with col2:
             st.session_state.respuestas["E-mail"] = st.text_input("E-mail", key="E-mail")
+            # Validar "E-mail"
+            email_general = st.session_state.respuestas["E-mail"]
+            if email_general.strip() and not re.match(r"[^@]+@[^@]+\.[^@]+", email_general.strip()):
+                st.warning("El mail no parece válido.")
+
 
         col3, col4 = st.columns(2)
         with col3:
@@ -340,7 +349,12 @@ with tabs[0]:
             st.session_state.respuestas["TEL / CEL "] = st.text_input("TEL / CEL ", key="TEL / CEL ")
         with col4:
             st.session_state.respuestas["Mail "] = st.text_input("Mail ", key="Mail ")
-    
+            # Validar "Mail " (de contacto)
+            email_contacto = st.session_state.respuestas["Mail "]
+            if email_contacto.strip() and not re.match(r"[^@]+@[^@]+\.[^@]+", email_contacto.strip()):
+                st.warning("El mail de contacto no parece válido.")
+                
+    # ------------------ RESEÑA EMPRESA ------------------
     with st.expander("**Breve Reseña de la Empresa**"):
         st.session_state.respuestas["Reseña Empresa"] = st.text_area("Describa la actividad de la empresa",
                                                     placeholder="Por favor explayarse un poco y completar en este recuadro, explicar el desarrollo de la actividad de la empresa, los productos que comercializa, sector y mercado en el que se desenvuelve, zona de influencia, ¡Ya que es muy importante para que la SGR tenga conocimiento sobre la empresa!",
@@ -439,12 +453,10 @@ with tabs[0]:
 
         st.session_state.respuestas["Avales y Contragarantías"] = st.session_state.avales
         st.session_state.respuestas["Destino de los fondos"] = destino
-        
-    
-    
+ 
     # ------------------ DATOS FILIATORIOS ------------------
     with st.expander("**Datos Filiatorios**"):
-        st.caption("*Información de los miembros del Directorio/ Titulares/ Socios Gerentes*")
+        st.caption("*Información de los miembros del Accionistas/ Directorio/ Titulares/ Socios Gerentes*")
 
         # Listas de opciones basadas en tu imagen
         opciones_cargo = ["COMPLETAR", "SOCIO GERENTE", "DIRECTOR", "SOCIO", "ACCIONISTA","PRESIDENTE","VICEPRESIDENTE","APODERADO"]
@@ -455,6 +467,10 @@ with tabs[0]:
             st.session_state.filiatorios = []
 
         total_actual = sum(f.get("% Participación", 0) for f in st.session_state.filiatorios)
+        participacion_total = total_actual  # para evitar error si lo usás más abajo
+
+        if total_actual > 100:
+            st.warning(f"❌ La suma total de participación excede el 100%. Ya tenés {total_actual:.2f}%.")
 
         with st.form(key="form_agregar_filiatorio"):
             st.markdown("**Agregar nuevo integrante**")
@@ -468,9 +484,11 @@ with tabs[0]:
             cargo = col3.selectbox("Cargo", opciones_cargo, key="nuevo_cargo")
             participacion = col4.number_input("% Participación", min_value=0.0, max_value=100.0 - total_actual, key="nuevo_participacion")
 
-            col5, col6 = st.columns(2)
+            col5, col6, col7 = st.columns(3)
             estado_civil = col5.selectbox("Estado Civil", opciones_estado_civil, key="nuevo_estado_civil")
             conyuge = col6.text_input("Nombre y Apellido del Cónyuge", key="nuevo_conyuge")
+            cuit_conyuge = col7.text_input("CUIT / CUIL Cónyuge", key = "cuit_nuevo_conyuge")
+            
 
             fiador = st.selectbox("Fiador", opciones_fiador, key="nuevo_fiador")
             #fecha_nacimiento = st.date_input("Fecha de Nacimiento (opcional)", key="nuevo_fecha_nac")
@@ -486,6 +504,9 @@ with tabs[0]:
             if not re.match(r'^\d{11}$', cuit_cuil.strip()):
                 errores.append("CUIT/CUIL inválido. Debe tener exactamente 11 dígitos numéricos.")
 
+            if cuit_conyuge and not re.match(r'^\d{11}$', str(cuit_conyuge).strip()):
+                errores.append("CUIT/CUIL del cónyuge inválido. Debe tener exactamente 11 dígitos o dejarse vacío.")
+
             if total_actual + participacion > 100:
                 errores.append(f"La suma de participación no puede superar el 100%. Ya tenés {total_actual}%.")
 
@@ -500,6 +521,7 @@ with tabs[0]:
                     "% Participación": participacion,
                     "Estado Civil": estado_civil,
                     "Nombre Cónyuge": conyuge.strip(),
+                    "CUIT / CUIL Cónyuge": cuit_conyuge,
                     "Fiador": fiador
                 })
                 st.success("✅ Integrante agregado correctamente.")
@@ -508,7 +530,7 @@ with tabs[0]:
         if st.session_state.filiatorios:
             st.markdown("### Integrantes cargados")
             df_filiarorio = pd.DataFrame(st.session_state.filiatorios)
-            columnas_fijas = ["Nombre y Apellido", "CUIT / CUIL", "Cargo", "% Participación", "Estado Civil", "Nombre Cónyuge", "Fiador"]
+            columnas_fijas = ["Nombre y Apellido", "CUIT / CUIL", "Cargo", "% Participación", "Estado Civil", "Nombre Cónyuge","CUIT / CUIL Cónyuge" ,"Fiador"]
             for col in columnas_fijas:
                 if col not in df_filiarorio.columns:
                     df_filiarorio[col] = ""
@@ -582,7 +604,8 @@ with tabs[0]:
                     "Razón Social": razon_social_ctrl.strip(),
                     "CUIT": cuit_ctrl.strip(),
                     "% de Participación": participacion_ctrl,
-                    "Código de la actividad principal": codigo_ctrl.strip()
+                    "Código de la actividad principal": codigo_ctrl.strip(),
+                    "Tipo Empresa": "Controlante / Controlada"
                 })
                 st.success("✅ Empresa controlante agregada.")
                 st.rerun()
@@ -604,7 +627,8 @@ with tabs[0]:
                 "Razón Social": "",
                 "CUIT": "",
                 "% de Participación": 0,
-                "Código de la actividad principal": ""
+                "Código de la actividad principal": "",
+                "Tipo Empresa": "Controlante / Controlada"
             }])
 
         st.markdown("---")
@@ -646,7 +670,8 @@ with tabs[0]:
                     "Razón Social": razon_social_vinc.strip(),
                     "CUIT": cuit_vinc.strip(),
                     "% de Participación": participacion_vinc,
-                    "Código de la actividad principal": codigo_vinc.strip()
+                    "Código de la actividad principal": codigo_vinc.strip(),
+                    "Tipo Empresa": "Vinculada"
                 })
                 st.success("✅ Empresa vinculada agregada.")
                 st.rerun()
@@ -668,7 +693,8 @@ with tabs[0]:
                 "Razón Social": "",
                 "CUIT": "",
                 "% de Participación": 0,
-                "Código de la actividad principal": ""
+                "Código de la actividad principal": "",
+                "Tipo Empresa": "Vinculada"
             }])
 
     # ------------------ PRINCIPALES LIBRADORES A DESCONTAR ------------------
@@ -752,7 +778,11 @@ with tabs[0]:
 
     # ------------------ PRINCIPALES PROVEEDORES, CLIENTES Y COMPETIDORES ------------------
     with st.expander("**Principales Proveedores, Clientes y Competidores**"):
-
+        
+        st.session_state.respuestas["camara_empresarial"] = st.radio("*¿Pertenece a alguna cámara empresaria?*", ["NO","SI"], key="camara_empre", horizontal=True)
+        st.session_state.respuestas["detalle_camara_empresarial"] = st.text_input("Nombre", key="detalle_camara_empre")
+         
+         
         # OPCIONES
         opciones_local_exterior = ["COMPLETAR", "LOCAL", "EXTERIOR"]
         opciones_modalidad_pago = ["COMPLETAR", "CONTADO", "A PLAZO"]
@@ -869,11 +899,11 @@ with tabs[0]:
             df_clientes = pd.DataFrame(st.session_state.clientes)
             st.dataframe(df_clientes)
             cols_client = st.columns(4)
-            for i, fila in enumerate(st.session_state.proveedores):
+            for i, fila in enumerate(st.session_state.clientes):
                 col = cols_client[i % 4]  # Tomamos una de las 4 columnas en orden
                 with col:
                     if st.button(f"❌ Eliminar {fila['Denominación']}", key=f"delete_client_{i}"):
-                        st.session_state.proveedores.pop(i)
+                        st.session_state.clientes.pop(i)
                         st.rerun()
         else:
             df_clientes = pd.DataFrame([{
@@ -926,19 +956,17 @@ with tabs[0]:
             df_competidores = pd.DataFrame(st.session_state.competidores)
             st.dataframe(df_competidores)
             cols_comp = st.columns(4)
-            for i, fila in enumerate(st.session_state.proveedores):
+            for i, fila in enumerate(st.session_state.competidores):
                 col = cols_comp[i % 4]  
                 with col:
                     if st.button(f"❌ Eliminar {fila['Denominación']}", key=f"delete_comp_{i}"):
-                        st.session_state.proveedores.pop(i)
+                        st.session_state.competidores.pop(i)
                         st.rerun()
         else:
             df_competidores = pd.DataFrame([{
                 "Denominación": "", "CUIT": "", "Teléfono": "",
                 "Segmento": "", "Participacion del Mercado %": 0, "Condiciones de ventas": ""
             }])
-
-
 
     # ------------------ REFERENCIAS BANCARIAS ------------------
     with st.expander("**Referencias Bancarias**"):
@@ -1000,7 +1028,7 @@ with tabs[0]:
                 "Mail": ""
             }])
 
-    # 6️⃣ PREVENCIÓN DE LAVADO DE ACTIVOS Y FINANCIAMIENTO DEL TERRORISMO
+    # ------------------ PREVENCIÓN DE LAVADO DE ACTIVOS Y FINANCIAMIENTO DEL TERRORISMO ------------------
     with st.expander("**Prevención de Lavado de Activos y Financiamiento del Terrorismo**"):
         
 
@@ -1023,7 +1051,8 @@ with tabs[0]:
         apellido_rep = st.text_input("Apellido", key="Apellido Representante")
         cargo_rep = st.text_input("Cargo", key="Cargo Representante")
         dni_rep = st.text_input("DNI", key="DNI Representante")
-
+        hoy = date.today()
+        fecha_formateada = hoy.strftime("%d/%m/%Y")
         
 
         # Guardar todo en un diccionario para agregarlo a tu archivo final si querés
@@ -1036,35 +1065,41 @@ with tabs[0]:
                 "Nombre": nombre_rep,
                 "Apellido": apellido_rep,
                 "Cargo": cargo_rep,
-                "DNI": dni_rep
+                "DNI": dni_rep,
+                "nombre y apellido": f"{nombre_rep} {apellido_rep}",
+                "fecha de hoy": fecha_formateada
             }
-        }
+        }   
 
-
-
+# ---- TAB 1: Deudas----
 with tabs[1]:
-    opciones_garantia = ["", "Fianza / Sola Firma (F)", "Prenda (P)", "Hipoteca (H)", "Warrant (W)", "Forward (FW)", "Cesión (C)", "Plazo Fijo (PF)"]
-    opciones_regimen = ["", "Mensual", "Bimestral", "Trimestral", "Semestral", "Anual"]
+    opciones_garantia = ["Completar", "Fianza / Sola Firma (F)", "Prenda (P)", "Hipoteca (H)", "Warrant (W)", "Forward (FW)", "Cesión (C)", "Plazo Fijo (PF)"]
+    opciones_regimen = ["Completar", "Mensual", "Bimestral", "Trimestral", "Semestral", "Anual"]
     monedas = ["ARS", "USD"]
 
     # Inicialización de dataframes en session_state si no existen
     if "bancos" not in st.session_state:
         st.session_state.bancos = pd.DataFrame([{
             "Entidad": "",
-            "Saldo Préstamos Amortizables": 0,
+            "Tipo de Moneda": "ARS",
+            "Margen Total Asignado (Calificación)":0,
+            "Sola Firma Utilizado":0,
+            "Saldo Préstamos Amortizables Utilizado": 0,
             "Garantía (*)": "",
             "Valor de la Cuota": 0,
             "Régimen de Amortización (**)": "",
             "Cantidad Cuotas Faltantes": 0,
             "Descuento de Cheques Utilizado": 0,
             "Adelanto en Cta Cte Utilizado": 0,
+            "Otros": 0,
             "Avales SGR": 0,
             "Tarjeta de Crédito Utilizado": 0,
             "Leasing Utilizado": 0,
             "Impo/Expo Utilizado": 0,
             "Tasa Promedio $": 0.0,
             "Tasa Promedio USD": 0.0,
-            "Tipo de Moneda": "ARS"
+            "Fecha desembolso (dd/mm/yyyy)": "",
+            "Fecha último vencimiento (dd/mm/yyyy)":""
         }] * 2)
 
     if "mercado" not in st.session_state:
@@ -1092,6 +1127,30 @@ with tabs[1]:
 
     # ============ BLOQUE DEUDA BANCARIA ============
     with st.expander(" **Deuda Bancaria y Financieras**"):
+
+        # Inicializar si no existen
+        if "acuerdo_descubierto" not in st.session_state:
+            st.session_state.acuerdo_descubierto = 0.0
+        if "cpd_descontados" not in st.session_state:
+            st.session_state.cpd_descontados = 0.0
+
+        # Inputs vinculados a session_state
+        st.session_state.acuerdo_descubierto = st.number_input(
+            "*Total Acuerdo en CC (Descubierto)*",
+            min_value=0.0,
+            format="%.2f",
+            step=1000.0,
+            value=st.session_state.acuerdo_descubierto,
+            key="input_acuerdo_descubierto"
+        )
+        st.session_state.cpd_descontados = st.number_input(
+            "*Total CPD Descontados*",
+            min_value=0.0,
+            format="%.2f",
+            step=1000.0,
+            value=st.session_state.cpd_descontados,
+            key="input_cpd_descontados"
+        )
         bancos_df = st.session_state.bancos.copy()
         bancos_editado = st.data_editor(
             bancos_df,
@@ -1100,13 +1159,84 @@ with tabs[1]:
             column_config={
                 "Garantía (*)": st.column_config.SelectboxColumn("Garantía (*)", options=opciones_garantia),
                 "Régimen de Amortización (**)": st.column_config.SelectboxColumn("Régimen de Amortización (**)", options=opciones_regimen),
-                "Tipo de Moneda": st.column_config.SelectboxColumn("Tipo de Moneda", options=monedas)
+                "Tipo de Moneda": st.column_config.SelectboxColumn("Tipo de Moneda", options=monedas),
+                "Fecha desembolso": st.column_config.TextColumn("Fecha desembolso (dd/mm/yyyy)"),
+                "Fecha último vencimiento": st.column_config.TextColumn("Fecha último vencimiento (dd/mm/yyyy)")
             },
             use_container_width=True
         )
         if st.button("Guardar Deuda Bancaria", key="guardar_bancos_btn"):
             st.session_state.bancos = bancos_editado
             st.success("✅ Deuda bancaria actualizada.")
+        
+        # Tomar el DataFrame guardado en session_state
+        bancos_df1 = st.session_state.bancos.copy()
+
+        # Columnas que representan montos a sumar
+        columnas_montos = [
+            "Sola Firma Utilizado",
+            "Saldo Préstamos Amortizables Utilizado",
+            "Descuento de Cheques Utilizado",
+            "Adelanto en Cta Cte Utilizado",
+            "Otros",
+            "Avales SGR",
+            "Tarjeta de Crédito Utilizado",
+            "Leasing Utilizado",
+            "Impo/Expo Utilizado"
+        ]
+
+        # Crear columna "Monto"
+        bancos_df1["Monto"] = bancos_df1[columnas_montos].sum(axis=1)
+
+        # Crear nueva columna Tasa combinada
+        bancos_df1["Tasa"] = bancos_df1.apply(
+            lambda row: row["Tasa Promedio $"] if row["Tipo de Moneda"] == "ARS" else row["Tasa Promedio USD"],
+            axis=1
+        )
+
+        # Columnas clave para agrupar
+        cols_clave = ["Entidad", "Tipo de Moneda", "Garantía (*)", 
+                    "Fecha desembolso (dd/mm/yyyy)", "Fecha último vencimiento (dd/mm/yyyy)"]
+
+        # Limpieza
+        for col in cols_clave:
+            bancos_df1[col] = bancos_df1[col].fillna("").astype(str).str.strip().replace("nan", "")
+
+        # Agrupar y calcular suma de Monto y promedio de Tasa
+        resumen = bancos_df1.groupby(cols_clave).agg({
+            "Monto": "sum",
+            "Tasa": "mean"
+        }).reset_index()
+
+        # Ordenar
+        resumen = resumen.sort_values(by="Entidad")
+
+        # Agregar fila total
+        fila_total = pd.DataFrame({
+            "Entidad": [""],
+            "Tipo de Moneda": [""],
+            "Garantía (*)": [""],
+            "Fecha desembolso (dd/mm/yyyy)": [""],
+            "Fecha último vencimiento (dd/mm/yyyy)": [""],
+            "Monto": [""],
+            "Tasa": [""]
+        })
+
+        resumen_final = pd.concat([resumen, fila_total], ignore_index=True)
+        
+        # Crear columnas nuevas con valores vacíos
+        resumen_final["Acuerdo Descubierto"] = ""
+        resumen_final["CPD Descontados"] = ""
+
+        # Si hay al menos 2 filas, asignar en la fila 2 (índice 1)
+        if len(resumen_final) > 1:
+            resumen_final.loc[1, "Acuerdo Descubierto"] = st.session_state.acuerdo_descubierto
+            resumen_final.loc[1, "CPD Descontados"] = st.session_state.cpd_descontados
+
+        # Guardar en session_state para exportación
+        st.session_state["resumen_deuda_bancaria"] = resumen_final
+
+        
 
     # ============ BLOQUE DEUDA MERCADO ============
     with st.expander(" **Deuda Mercado de Capitales**"):
@@ -1140,107 +1270,268 @@ with tabs[1]:
             st.session_state.deudas_comerciales = comercial_editado
             st.success("✅ Deuda comercial actualizada.")
 
-
-
+# ---- TAB 2: Vetas ----
 with tabs[2]:
+    
     # === CONFIGURACIONES INICIALES ===
     opciones_tipo = ["COMPLETAR", "AGROPECUARIO", "INDUSTRIA", "COMERCIO", "SERVICIOS", "CONSTRUCCION"]
     subcategorias_agro = ["COMPLETAR", "AGRICULTURA", "GANADERIA", "TAMBO", "OTROS"]
     meses_largos = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
                     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 
-    # Inicialización si no existen
-    for key in ["ventas_interno", "ventas_externo", "compras"]:
-        if key not in st.session_state:
-            filas_iniciales = []
-            for mes in meses_largos:
+    # === INICIALIZAR LOS DATAFRAMES CON ESTRUCTURA ADECUADA ===
+    def inicializar_dataframe(tipo, incluir_region=False):
+        filas = []
+        for mes in meses_largos:
+            if tipo == "AGROPECUARIO":
+                for subtipo in subcategorias_agro[1:]:  # sin "COMPLETAR"
+                    fila = {
+                        "Mes": mes,
+                        "Tipo": tipo,
+                        "Subtipo": subtipo,
+                        "Año en curso": 0.0,
+                        "Año 1": 0.0,
+                        "Año 2": 0.0,
+                        "Año 3": 0.0
+                    }
+                    if incluir_region:
+                        fila["Región"] = ""
+                    filas.append(fila)
+            else:
                 fila = {
                     "Mes": mes,
-                    "Tipo": "COMPLETAR",
+                    "Tipo": tipo,
                     "Subtipo": "COMPLETAR",
                     "Año en curso": 0.0,
                     "Año 1": 0.0,
                     "Año 2": 0.0,
                     "Año 3": 0.0
                 }
-                if key == "ventas_externo":
+                if incluir_region:
                     fila["Región"] = ""
-                filas_iniciales.append(fila)
-            st.session_state[key] = pd.DataFrame(filas_iniciales)
+                filas.append(fila)
+        return pd.DataFrame(filas)
 
-    def agregar_fila(df_name, mes_seleccionado):
-        df = st.session_state[df_name]
-        nueva_fila = {
-            "Mes": mes_seleccionado,
-            "Tipo": "COMPLETAR",
-            "Subtipo": "COMPLETAR",
-            "Año en curso": 0.0,
-            "Año 1": 0.0,
-            "Año 2": 0.0,
-            "Año 3": 0.0,
-        }
-        if df_name == "ventas_externo":
-            nueva_fila["Región"] = ""
+    # Cargar los dataframes iniciales si no existen
+    for nombre in ["ventas_interno", "ventas_externo", "compras"]:
+        if nombre not in st.session_state:
+            incluir_region = nombre == "ventas_externo"
+            df = pd.concat([
+                inicializar_dataframe(tipo, incluir_region=incluir_region)
+                for tipo in opciones_tipo if tipo != "COMPLETAR"
+            ], ignore_index=True)
+            st.session_state[nombre] = df
 
-        idxs = df.index[df["Mes"] == mes_seleccionado].tolist()
-        insertar_idx = idxs[-1] + 1 if idxs else len(df)
+    # === FUNCIÓN PARA MOSTRAR BLOQUE CON DATA_EDITORS POR TIPO ===
+    def mostrar_bloque_por_tipo(titulo_bloque, nombre_variable_session, incluir_region=False):
+        st.markdown(f"#### {titulo_bloque}")
 
-        nuevo_df = pd.concat([
-            df.iloc[:insertar_idx],
-            pd.DataFrame([nueva_fila]),
-            df.iloc[insertar_idx:]
-        ]).reset_index(drop=True)
+        orden_fijo = ["AGROPECUARIO", "INDUSTRIA", "COMERCIO", "SERVICIOS", "CONSTRUCCION"]
+        opciones_tipo = ["COMPLETAR"] + orden_fijo
 
-        st.session_state[df_name] = nuevo_df
+        if nombre_variable_session not in st.session_state:
+            return
 
-    def mostrar_bloque_data_editor(nombre_bloque, df_name, incluir_region=False):
-        st.markdown(f"#### {nombre_bloque}")
-        df = st.session_state[df_name].copy()
+        df_total = st.session_state[nombre_variable_session].copy()
 
-        columnas_editor = {
-            "Mes": st.column_config.SelectboxColumn("Mes", options=meses_largos),
-            "Tipo": st.column_config.SelectboxColumn("Tipo", options=opciones_tipo),
-            "Subtipo": st.column_config.SelectboxColumn("Subtipo", options=subcategorias_agro),
-            "Año en curso": st.column_config.NumberColumn("Año en curso", step=100.0, format="%.3f"),
-            "Año 1": st.column_config.NumberColumn("Año 1", step=100.0, format="%.3f"),
-            "Año 2": st.column_config.NumberColumn("Año 2", step=100.0, format="%.3f"),
-            "Año 3": st.column_config.NumberColumn("Año 3", step=100.0, format="%.3f"),
-        }
-        if incluir_region:
-            columnas_editor["Región"] = st.column_config.TextColumn("Región")
+        for tipo in orden_fijo:
+            df_tipo = df_total[df_total["Tipo"] == tipo].copy()
+            if df_tipo.empty:
+                continue
 
-        df_editado = st.data_editor(
-            df,
-            key=f"editor_{df_name}",
-            use_container_width=True,
-            num_rows="dynamic",
-            column_config=columnas_editor,
-            hide_index=True
-        )
+            st.markdown(f"##### Tipo: {tipo}")
+            key_editor = f"{nombre_variable_session}_{tipo}"
 
-        if st.button(f"💾 Guardar cambios en {nombre_bloque}", key=f"guardar_{df_name}"):
-            st.session_state[df_name] = df_editado
-            st.success("✅ Cambios guardados.")
+            # Column config condicional
+            column_config = {
+                "Mes": st.column_config.SelectboxColumn("Mes", options=meses_largos),
+                "Tipo": st.column_config.SelectboxColumn("Tipo", options=opciones_tipo),
+                "Año en curso": st.column_config.NumberColumn("Año en curso", step=100.0, format="%.3f"),
+                "Año 1": st.column_config.NumberColumn("Año 1", step=100.0, format="%.3f"),
+                "Año 2": st.column_config.NumberColumn("Año 2", step=100.0, format="%.3f"),
+                "Año 3": st.column_config.NumberColumn("Año 3", step=100.0, format="%.3f"),
+            }
 
-        if not st.session_state[df_name].empty:
-            resumen = st.session_state[df_name].groupby("Tipo")[["Año en curso", "Año 1", "Año 2", "Año 3"]].sum()
-            st.markdown("##### Resumen por tipo")
-            st.dataframe(resumen.style.format("${:,.3f}"))
-        else:
-            st.info("Todavía no hay datos cargados.")
+            # Mostrar Subtipo solo en AGROPECUARIO
+            if tipo == "AGROPECUARIO":
+                column_config["Subtipo"] = st.column_config.SelectboxColumn("Subtipo", options=subcategorias_agro)
+            else:
+                if "Subtipo" in df_tipo.columns:
+                    df_tipo = df_tipo.drop(columns=["Subtipo"])  # Oculta Subtipo en editor
 
+            if incluir_region:
+                column_config["Región"] = st.column_config.TextColumn("Región")
+
+            df_editado = st.data_editor(
+                df_tipo,
+                key=key_editor,
+                column_config=column_config,
+                num_rows="dynamic",
+                use_container_width=True
+            )
+
+            if st.button(f"💾 Guardar {titulo_bloque} - {tipo}", key=f"guardar_{nombre_variable_session}_{tipo}"):
+                # Asegurar columna Subtipo presente para mantener formato completo
+                if "Subtipo" not in df_editado.columns:
+                    df_editado["Subtipo"] = "COMPLETAR"
+
+                df_otros = df_total[df_total["Tipo"] != tipo].copy()
+                nuevo_df = pd.concat([df_otros, df_editado], ignore_index=True)
+                st.session_state[nombre_variable_session] = nuevo_df
+
+                if key_editor in st.session_state:
+                    del st.session_state[key_editor]
+                st.success(f"✅ Cambios guardados para {tipo}")
+
+    # === EXPANDERS CON BLOQUES ===
     with st.expander("**Ventas Mercado Interno (Netas de IVA)**", expanded=False):
-        mostrar_bloque_data_editor("Ventas - Mercado Interno (Netas de IVA)", "ventas_interno")
+        mostrar_bloque_por_tipo("Ventas - Mercado Interno (Netas de IVA)", "ventas_interno")
 
     with st.expander("**Ventas Mercado Externo (Netas de IVA)**", expanded=False):
-        mostrar_bloque_data_editor("Ventas - Mercado Externo (Netas de IVA)", "ventas_externo", incluir_region=True)
+        mostrar_bloque_por_tipo("Ventas - Mercado Externo (Netas de IVA)", "ventas_externo", incluir_region=True)
 
     with st.expander("**Compras (Netas de IVA)**", expanded=False):
-        mostrar_bloque_data_editor("Compras Mensuales (Netas de IVA)", "compras")
+        mostrar_bloque_por_tipo("Compras Mensuales (Netas de IVA)", "compras")
+        
+    def mostrar_resumen_12_meses(lista_df_names):
+        hoy = pd.to_datetime("today")
+        primer_dia_mes_actual = pd.to_datetime(hoy.strftime("%Y-%m-01"))
+        fecha_limite = primer_dia_mes_actual - pd.DateOffset(months=11)
 
-   # === PLAN DE VENTAS POR ACTIVIDAD ===
+        df_union = pd.DataFrame()
+        for df_name in lista_df_names:
+            if df_name in st.session_state and not st.session_state[df_name].empty:
+                df = st.session_state[df_name].copy()
+                meses_dict = {mes: i for i, mes in enumerate(meses_largos, start=1)}
+                df["Mes_num"] = df["Mes"].map(meses_dict)
+                df["Mes_num"] = pd.to_numeric(df["Mes_num"], errors="coerce")
+                df = df.dropna(subset=["Mes_num"])
+                df["Mes_num"] = df["Mes_num"].astype(int)
+
+                año_actual = pd.to_datetime("today").year
+                columnas_anio = ["Año en curso", "Año 1", "Año 2", "Año 3"]
+
+                version_expandida = pd.DataFrame()
+                for i, columna in enumerate(columnas_anio):
+                    parcial = df.copy()
+                    parcial["Año destino"] = año_actual - i
+                    parcial["Monto"] = pd.to_numeric(parcial[columna], errors="coerce").fillna(0)
+                    version_expandida = pd.concat([version_expandida, parcial], ignore_index=True)
+
+                version_expandida["Fecha"] = pd.to_datetime(
+                    version_expandida["Año destino"].astype(str) + "-" + version_expandida["Mes_num"].astype(str).str.zfill(2) + "-01",
+                    errors="coerce"
+                )
+                df_union = pd.concat([df_union, version_expandida], ignore_index=True)
+
+        df_12m = df_union[df_union["Fecha"] >= fecha_limite].copy()
+        if df_12m.empty:
+            st.info("No hay datos para los últimos 12 meses.")
+            return
+
+        df_12m["Subtipo"] = df_12m["Subtipo"].astype(str).str.upper().str.strip()
+        df_12m = df_12m[df_12m["Subtipo"] != "COMPLETAR"]
+        df_12m["Mes-Año"] = df_12m["Fecha"].dt.strftime("%m-%Y")
+
+        rango_fechas = pd.date_range(end=hoy, periods=12, freq="MS")
+        mes_anio_str = rango_fechas.strftime("%m-%Y")
+        subtipos_validos = [s for s in subcategorias_agro if s != "COMPLETAR"]
+        index_completo = pd.MultiIndex.from_product(
+            [mes_anio_str, [s.upper() for s in subtipos_validos]],
+            names=["Mes-Año", "Subtipo"]
+        )
+
+        df_agrupado = (
+            df_12m.groupby(["Mes-Año", "Subtipo"])["Monto"]
+            .sum()
+            .reindex(index_completo, fill_value=0)
+            .reset_index()
+        )
+
+        df_por_subtipo = df_agrupado.pivot(index="Mes-Año", columns="Subtipo", values="Monto").fillna(0).reset_index()
+        df_por_subtipo["Orden"] = pd.to_datetime(df_por_subtipo["Mes-Año"], format="%m-%Y")
+        df_por_subtipo = df_por_subtipo.sort_values("Orden", ascending=False).drop(columns="Orden")
+
+        #st.subheader("📊 Resumen últimos 12 meses por Subtipo (solo ventas)")
+        columnas_numericas = df_por_subtipo.select_dtypes(include=["number"]).columns
+        #st.dataframe(df_por_subtipo.style.format({col: "${:,.0f}" for col in columnas_numericas}), use_container_width=True)
+
+        st.session_state["resumen_12_meses_ventas"] = df_por_subtipo
+
+    def mostrar_resumen_ventas_y_compras_simple():
+        df_final = pd.DataFrame()
+        columnas_anio = ["Año en curso", "Año 1", "Año 2", "Año 3"]
+        meses_dict = {mes: i for i, mes in enumerate(meses_largos, start=1)}
+        meses_ordenados = meses_largos
+
+        # Fuente: solo ventas_interno, ventas_externo, compras
+        fuentes = ["ventas_interno", "ventas_externo", "compras"]
+
+        for df_name in fuentes:
+            if df_name not in st.session_state or st.session_state[df_name].empty:
+                continue
+
+            df = st.session_state[df_name].copy()
+            df = df.dropna(subset=["Mes"])
+            df["Mes"] = df["Mes"].astype(str)
+            df["Mes_num"] = df["Mes"].map(meses_dict)
+            df = df.dropna(subset=["Mes_num"])
+
+            for col in columnas_anio:
+                if col not in df.columns:
+                    continue
+                parcial = df.copy()
+                parcial["Monto"] = pd.to_numeric(parcial[col], errors="coerce").fillna(0)
+                parcial["Columna_año"] = col
+                parcial["Origen"] = df_name  # ← MOVIDO ANTES
+                parcial = parcial[["Mes", "Monto", "Columna_año", "Origen"]]  # ← INCLUIR 'Origen'
+                df_final = pd.concat([df_final, parcial], ignore_index=True)
+
+        # Construcción de dataframes vacíos con ceros si no hay datos
+        def construir_df_con_ceros():
+            index = pd.Index(meses_ordenados, name="Mes")
+            columnas = pd.Index(columnas_anio, name="Columna_año")
+            return pd.DataFrame(0, index=index, columns=columnas)
+
+        # RESUMEN VENTAS
+        df_ventas = df_final[df_final["Origen"].isin(["ventas_interno", "ventas_externo"])]
+        if not df_ventas.empty:
+            resumen_ventas = df_ventas.groupby(["Mes", "Columna_año"])["Monto"].sum().unstack("Columna_año").fillna(0)
+            resumen_ventas = resumen_ventas.reindex(meses_ordenados).fillna(0)
+        else:
+            resumen_ventas = construir_df_con_ceros()
+        #st.subheader("📊 Resumen Total de Ventas (Interno + Externo)")
+        #st.dataframe(resumen_ventas.style.format("${:,.0f}"), use_container_width=True)
+
+        # RESUMEN COMPRAS
+        df_compras = df_final[df_final["Origen"] == "compras"]
+        if not df_compras.empty:
+            resumen_compras = df_compras.groupby(["Mes", "Columna_año"])["Monto"].sum().unstack("Columna_año").fillna(0)
+            resumen_compras = resumen_compras.reindex(meses_ordenados).fillna(0)
+        else:
+            resumen_compras = construir_df_con_ceros()
+        #st.subheader("📊 Resumen Total de Compras")
+        #st.dataframe(resumen_compras.style.format("${:,.0f}"), use_container_width=True)
+
+        # Guardar en session_state para exportación
+        st.session_state["resumen_ventas_simple"] = resumen_ventas.reset_index()
+        st.session_state["resumen_compras_simple"] = resumen_compras.reset_index()
+
+    # Mostrar resumen de ventas (últimos 12 meses)
+    mostrar_resumen_12_meses(["ventas_interno", "ventas_externo"])
+
+    # Línea divisoria
+    #st.divider()
+
+    # Mostrar resumen general con TODO
+    mostrar_resumen_ventas_y_compras_simple()   
+    #st.write("VENTAS RESUMEN PARA EXPORTAR", st.session_state["resumen_ventas_simple"])
+    #st.write("COMPRAS RESUMEN PARA EXPORTAR", st.session_state["resumen_compras_simple"])
+
+    # === PLAN DE VENTAS POR ACTIVIDAD ===
     PRODUCTOS_AGRICULTURA = ["Trigo", "Maíz", "Soja", "Girasol"]
     CATEGORIAS_GANADERIA = ["Novillos", "Vaquillonas", "Terneros", "Vacas"]
+    TODAS_LAS_ACTIVIDADES = ["Agricultura", "Ganadería", "Tambo", "Otros"]
 
     def crear_df_ventas(meses, columnas):
         data = {"Mes": meses}
@@ -1248,15 +1539,34 @@ with tabs[2]:
             data[col] = [0.0] * len(meses)
         return pd.DataFrame(data)
 
+    def crear_df_vacio(act):
+        if act == "Agricultura":
+            columnas = PRODUCTOS_AGRICULTURA
+        elif act == "Ganadería":
+            columnas = CATEGORIAS_GANADERIA
+        elif act == "Tambo":
+            columnas = ["Litros"]
+        elif act == "Otros":
+            columnas = ["Actividad Otros"]
+        else:
+            columnas = []
+        return crear_df_ventas(meses_largos, columnas)
+
+    # Inicializar storage
     if "planes_guardados_por_actividad" not in st.session_state:
         st.session_state.planes_guardados_por_actividad = {}
 
     with st.expander("**Plan de Ventas por Actividad**", expanded=False):
         st.markdown("##### Seleccioná las actividades que realizás:")
+        # Inicializar actividades seleccionadas desde session_state si existen
+        if "actividades_seleccionadas" not in st.session_state:
+            st.session_state.actividades_seleccionadas = ["Agricultura"]
+
         actividades = st.multiselect(
             "Actividades productivas",
-            ["Agricultura", "Ganadería", "Tambo", "Otros"],
-            default=["Agricultura"]
+            TODAS_LAS_ACTIVIDADES,
+            default=st.session_state.actividades_seleccionadas,
+            key="actividades_seleccionadas"
         )
 
         st.markdown("#### Comercialización y proveedores")
@@ -1278,6 +1588,7 @@ with tabs[2]:
 
         for act in actividades:
             st.markdown(f"##### {act}")
+
             if act == "Agricultura":
                 columnas = PRODUCTOS_AGRICULTURA
             elif act == "Ganadería":
@@ -1286,40 +1597,67 @@ with tabs[2]:
                 columnas = ["Litros"]
             elif act == "Otros":
                 nombre_actividad = st.text_input("Nombre de la actividad", key="otros_nombre")
-                if nombre_actividad:
-                    columnas = [nombre_actividad]
-                else:
-                    continue
+                columnas = [nombre_actividad] if nombre_actividad else ["Actividad Otros"]
             else:
                 continue
 
-            # Usamos la clave dentro de planes_guardados_por_actividad
-            if act in st.session_state.planes_guardados_por_actividad:
-                df_temp = st.session_state.planes_guardados_por_actividad[act].copy()
-            else:
-                df_temp = crear_df_ventas(meses_largos, columnas)
+            # Obtener DF actual (si está) o crear vacío
+            df_temp = st.session_state.planes_guardados_por_actividad.get(act, crear_df_ventas(meses_largos, columnas)).copy()
 
+            # Configurar columnas del editor
             column_config = {
-                col: st.column_config.NumberColumn(col, format="%.3f")
-                for col in columnas
+                col: st.column_config.NumberColumn(col, format="%.3f") for col in columnas
             }
             column_config["Mes"] = st.column_config.SelectboxColumn("Mes", options=meses_largos)
 
-            # Usamos una clave de widget distinta para evitar conflictos
-            widget_key = f"editor_actividad_{act}"
-
+            # Mostrar el editor
             edited_df = st.data_editor(
                 df_temp,
-                key=widget_key,
+                key=f"editor_actividad_{act}",
                 use_container_width=True,
                 num_rows="fixed",
                 column_config=column_config
             )
 
-            # Solo guardamos en planes_guardados_por_actividad
-            st.session_state.planes_guardados_por_actividad[act] = edited_df
+            # Botón para confirmar y guardar
+            btn_key = f"btn_guardar_{act}"
 
-      
+            if st.button(f"Guardar plan de ventas para {act}", key=btn_key):
+                st.session_state.planes_guardados_por_actividad[act] = edited_df
+                st.success(f"✅ Plan de ventas para {act} guardado correctamente.")
+
+                # Limpieza segura después de usarlo
+                if btn_key in st.session_state:
+                    del st.session_state[btn_key]
+
+
+    # === FUNCIÓN PARA NORMALIZAR TODAS LAS COLUMNAS EN TODOS LOS DF ===
+    COLUMNAS_FINALES = ["Mes", "Trigo", "Maíz", "Soja", "Girasol", "Novillos", "Vaquillonas", "Terneros", "Vacas", "Litros", "Actividad Otros"]
+
+    def normalizar_columnas(df):
+        for col in COLUMNAS_FINALES:
+            if col not in df.columns:
+                df[col] = 0.0
+        return df[COLUMNAS_FINALES + ["Actividad"]]  # Asegura orden correcto
+
+    # === GARANTIZAR QUE TODAS LAS ACTIVIDADES ESTÉN PRESENTES EN session_state ===
+    for act in TODAS_LAS_ACTIVIDADES:
+        if act not in st.session_state.planes_guardados_por_actividad:
+            st.session_state.planes_guardados_por_actividad[act] = crear_df_vacio(act)
+
+    # === EXPORTACIÓN FINAL: unir todos los planes en uno solo para Excel ===
+    df_planes_completo = pd.concat(
+        [
+            normalizar_columnas(
+                st.session_state.planes_guardados_por_actividad[act].assign(
+                    Actividad=st.session_state.get("otros_nombre", "Actividad Otros") if act == "Otros" else act
+                )
+            )
+            for act in TODAS_LAS_ACTIVIDADES
+        ],
+        ignore_index=True
+    )
+
 @st.cache_data(show_spinner=False)
 def obtener_geodatos():
     url_prov = "https://apis.datos.gob.ar/georef/api/provincias"
@@ -1341,15 +1679,11 @@ def obtener_geodatos():
         dict_localidades[prov] = localidades
 
     return provincias, dict_departamentos, dict_localidades
-
 provincias, departamentos_por_provincia, localidades_por_provincia = obtener_geodatos()
 
-        
-
-
-
-# ================== CAMPOS PROPIOS ==================
+# # ---- TAB 3: Adicional Agro ----
 with tabs[3]:
+
     # ================== CONFIGURACIÓN GENERAL ==================
     cultivos = ["Maíz", "Soja", "Soja 2da", "Trigo", "Cebada", "Sorgo", "Girasol", "Poroto", "Otros Cultivos"]
     metodologias_pago = ["Porcentaje de rinde", "Precio fijo", "Mixto"]
@@ -1360,7 +1694,7 @@ with tabs[3]:
         # Inicialización
         if "df_campos" not in st.session_state:
             st.session_state.df_campos = pd.DataFrame({
-                "Nombre del Campo": [f"Ejemplo {i+1}" for i in range(8)],
+                "Nombre del Campo": ["" for i in range(8)],
                 "Provincia": ["" for _ in range(8)],
                 "Partido": ["" for _ in range(8)],
                 "Localidad": ["" for _ in range(8)],
@@ -1368,7 +1702,7 @@ with tabs[3]:
                 "Has": [0.0 for _ in range(8)],
                 "Valor U$/ha": [0.0 for _ in range(8)],
                 "Has Hipotecadas": [0.0 for _ in range(8)],
-                "Estado Actual": ["" for _ in range(8)],
+                "Estado Actual (Agricola/Ganadero/Tambo/Otros)": ["" for _ in range(8)],
             })
 
         df_campos_tmp = st.data_editor(
@@ -1388,15 +1722,15 @@ with tabs[3]:
         # Inicialización
         if "df_campos_arrendados" not in st.session_state:
             st.session_state.df_campos_arrendados = pd.DataFrame({
-                "Nombre del Campo": [f"Ejemplo Arrendado {i+1}" for i in range(8)],
+                "Nombre del Campo": ["" for i in range(8)], #f"Ejemplo Arrendado {i+1}" for i in range(8)
                 "Provincia": ["" for _ in range(8)],
                 "Partido": ["" for _ in range(8)],
                 "Localidad": ["" for _ in range(8)],
                 "Arrendador": ["" for _ in range(8)],
                 "Has Arrendadas": [0.0 for _ in range(8)],
-                "Valor U$/ha": [0.0 for _ in range(8)],
-                "Metodología de Pago": ["" for _ in range(8)],
-                "Duración del Contrato": ["" for _ in range(8)],
+                "Precio: US$/qq/kg. Nov": [0.0 for _ in range(8)],
+                "Metodología de Pago (Adelantado/A cosecha/Otros)": ["" for _ in range(8)],
+                "Duración del Contrato (años)": ["" for _ in range(8)],
             })
 
         df_arrendados_tmp = st.data_editor(
@@ -1413,9 +1747,17 @@ with tabs[3]:
             st.session_state.df_campos_arrendados = df_arrendados_tmp
             st.success("✅ Campos arrendados actualizados.")
 
+
+        st.session_state.respuestas["años_actividad_agropecuaria"] = st.number_input("*Años en la Actividad Agropecuaria*", key="años_actividad_agropecuaria1")
+        st.session_state.respuestas["gasto_estruc_estimados_mes"] = st.number_input("*Gastos de Estructura (Estimado $/Mes)*", key="gasto_estruc_estimados_mes")
+        st.session_state.respuestas["retiros_mes"] = st.number_input("*Retiros (Estimado $/Mes)*", key="retiros_mes")
+
     # ================== AGRICULTURA ==================
 
     with st.expander("**Agricultura**"):
+
+        st.session_state.respuestas["tns_forward_fijadas_y_sin_fijar"] = st.number_input("*Produccion con Contratos Forward (TN fijas o a fijar)*", key="tns_forward_fijadas_y_sin_fijar")
+
         cultivos = ["Maíz", "Soja", "Soja 2da", "Trigo", "Cebada", "Sorgo", "Girasol", "Poroto", "Otros Cultivos"]
         indicadores = [
             "Has p/adm", "Has a %", "% Propio", "Rendimiento (tn/ha)",
@@ -1424,8 +1766,8 @@ with tabs[3]:
         ]
         campanias_fijas = {
             "actual": "ej 24/25",
-            "hace_1": "ej 23/24",
-            "hace_2": "ej 22/23"
+            "hace_1_año": "ej 23/24",
+            "un_año_adelante": "ej 25/26"
         }
 
         # Inicialización si no existe
@@ -1439,8 +1781,8 @@ with tabs[3]:
         if "nombres_visibles_campanias" not in st.session_state:
             st.session_state.nombres_visibles_campanias = {
                 "actual": "Campaña Actual",
-                "hace_1": "Campaña hace 1 año",
-                "hace_2": "Campaña hace 2 años"
+                "hace_1_año": "Campaña hace 1 año",
+                "un_año_adelante": "Campaña próxima"
             }
 
         for clave_logica, clave_real in campanias_fijas.items():
@@ -1471,134 +1813,162 @@ with tabs[3]:
                 st.session_state.agricultura_por_campania[clave_real] = df_agro_editado
                 st.success(f"✅ {nombre_visible} actualizada.")
 
-    # === GANADERÍA (CORREGIDO) ===
     with st.expander("**Ganadería**"):
 
-        def mostrar_editor_dataframe(nombre_df, key_widget, default_df):
-            # Evitar conflicto: eliminar key del widget
-            st.session_state.pop(key_widget, None)
+        def mostrar_seccion_doble_editor(titulo, nombre_df1, df1_default, key1, nombre_df2, df2_default, key2, key_guardar):
+            st.subheader(titulo)
 
-            # Inicializar si no existe o viene mal del .pkl
-            if nombre_df not in st.session_state or not isinstance(st.session_state[nombre_df], pd.DataFrame):
-                try:
-                    st.session_state[nombre_df] = pd.DataFrame(st.session_state[nombre_df])
-                except:
-                    st.session_state[nombre_df] = default_df
+            # Inicializar si no existe
+            for nombre_df, df_default in [(nombre_df1, df1_default), (nombre_df2, df2_default)]:
+                if nombre_df not in st.session_state or not isinstance(st.session_state[nombre_df], pd.DataFrame):
+                    st.session_state[nombre_df] = df_default.copy()
 
-            # Editor
-            df_editado = st.data_editor(
-                st.session_state[nombre_df],
-                key=key_widget,
+            # Editores
+            df1_editado = st.data_editor(
+                st.session_state[nombre_df1],
+                key=key1,
                 use_container_width=True,
                 num_rows="fixed"
             )
 
-            # Guardar si cambió
-            if not df_editado.equals(st.session_state[nombre_df]):
-                st.session_state[nombre_df] = df_editado
+            df2_editado = st.data_editor(
+                st.session_state[nombre_df2],
+                key=key2,
+                use_container_width=True,
+                num_rows="fixed"
+            )
 
-        # Cría
-        st.subheader("Cría")
-        mostrar_editor_dataframe(
-            "df_cria", "df_cria_editor",
+            # Botón de guardado conjunto
+            if st.button(f"💾 Guardar {titulo}", key=key_guardar):
+                st.session_state[nombre_df1] = df1_editado
+                st.session_state[nombre_df2] = df2_editado
+                st.success(f"✅ {titulo} guardado correctamente.")
+
+        # === CRÍA ===
+        mostrar_seccion_doble_editor(
+            "Cría",
+            "df_cria",
             pd.DataFrame(0.0, index=["Propias", "De Terceros", "Gasto Directo (US$/cab)", "Gasto Comercial (US$/cab)"],
-                        columns=["Vacas", "Vaquillonas", "Terneros/as", "Toros"])
-        )
-        mostrar_editor_dataframe(
-            "indices_cria", "indices_cria_editor",
-            pd.DataFrame({"\u00cdtem": ["% Preñez", "% Parición", "% Destete"], "Valor": [0.0, 0.0, 0.0]})
+                        columns=["Vacas", "Vaquillonas", "Terneros/as", "Toros"]),
+            "editor_cria",
+            "indices_cria",
+            pd.DataFrame({"\u00cdtem": ["% Preñez", "% Parición", "% Destete"], "Valor": [0.0, 0.0, 0.0]}),
+            "editor_indices_cria",
+            "guardar_cria"
         )
 
         st.markdown("---")
 
-        # Invernada
-        st.subheader("Invernada")
-        mostrar_editor_dataframe(
-            "df_invernada", "df_invernada_editor",
+        # === INVERNADA ===
+        mostrar_seccion_doble_editor(
+            "Invernada",
+            "df_invernada",
             pd.DataFrame(0.0, index=["Propias", "De Terceros", "Gasto Directo (US$/cab)", "Gasto Comercial (US$/cab)"],
-                        columns=["Novillos", "Novillitos", "Vacas Descarte", "Vaquillonas"])
-        )
-        mostrar_editor_dataframe(
-            "indices_invernada", "indices_invernada_editor",
+                        columns=["Novillos", "Novillitos", "Vacas Descarte", "Vaquillonas"]),
+            "editor_invernada",
+            "indices_invernada",
             pd.DataFrame({"\u00cdtem": ["Compras (cabezas/año)", "Ventas (cabezas/año)", "Peso Promedio Compras", "Peso Promedio Ventas"],
-                        "Valor": [0.0, 0.0, 0.0, 0.0]})
+                        "Valor": [0.0, 0.0, 0.0, 0.0]}),
+            "editor_indices_invernada",
+            "guardar_invernada"
         )
 
         st.markdown("---")
 
-        # Feedlot
-        st.subheader("Feedlot")
-        mostrar_editor_dataframe(
-            "df_feedlot", "df_feedlot_editor",
+        # === FEEDLOT ===
+        mostrar_seccion_doble_editor(
+            "Feedlot",
+            "df_feedlot",
             pd.DataFrame(0.0, index=["Propias", "De Terceros", "Gasto Directo (US$/cab)", "Gasto Comercial (US$/cab)"],
-                        columns=["Novillos", "Novillitos", "Vacas Descarte", "Vaquillonas"])
-        )
-        mostrar_editor_dataframe(
-            "indices_feedlot", "indices_feedlot_editor",
-            pd.DataFrame({"\u00cdtem": ["Compras (cabezas/año)", "Ventas (cabezas/año)", "Peso Promedio Compras", "Peso Promedio Ventas"],
-                        "Valor": [0.0, 0.0, 0.0, 0.0]})
-        )
-
-        st.markdown("---")
-
-        # Tambo
-        st.subheader("Tambo")
-        mostrar_editor_dataframe(
-            "df_tambo", "df_tambo_editor",
-            pd.DataFrame(0.0, index=["Propias", "De Terceros", "Gasto Directo (US$/cab)", "Gasto Comercial (US$/cab)"],
-                        columns=["Vacas (VO+VS)", "Vaquillonas", "Terneras", "Terneros", "Toros"])
-        )
-        mostrar_editor_dataframe(
-            "indices_tambo", "indices_tambo_editor",
-            pd.DataFrame({"\u00cdtem": ["Lt/día", "Precio US$/Lt", "% VO", "% Grasa Butirosa"], "Valor": [0.0, 0.0, 0.0, 0.0]})
+                        columns=["Novillos", "Novillitos", "Vacas Descarte", "Vaquillonas"]),
+            "editor_feedlot",
+            "indices_feedlot",
+            pd.DataFrame({"\u00cdtem": ["Compras (cabezas/año)", "Ventas (cabezas/año)", "Peso Promedio Compras", "Peso Promedio Ventas", "Tiempo de engorde (meses)"],
+                        "Valor": [0.0, 0.0, 0.0, 0.0, 0.0]}),
+            "editor_indices_feedlot",
+            "guardar_feedlot"
         )
 
         st.markdown("---")
 
-        # Base Forrajera
+        # === TAMBO ===
+        mostrar_seccion_doble_editor(
+            "Tambo",
+            "df_tambo",
+            pd.DataFrame(0.0, index=["Cantidad", "Gastos Directos (US$/Vaca/año)"],
+                        columns=["Vacas (VO+VS)", "Vaquillonas", "Terneras", "Terneros", "Toros"]),
+            "editor_tambo",
+            "indices_tambo",
+            pd.DataFrame({"\u00cdtem": ["Lt/día", "Precio US$/Lt", "% VO", "% Grasa Butirosa"],
+                        "Valor": [0.0, 0.0, 0.0, 0.0]}),
+            "editor_indices_tambo",
+            "guardar_tambo"
+        )
+
+        st.markdown("---")
+
+        # === BASE FORRAJERA ===
         st.subheader("Base Forrajera")
-        mostrar_editor_dataframe(
-            "df_base_forrajera", "base_forrajera_editor",
-            pd.DataFrame({"Categoria": ["Alfalfa", "Sorgo", "Maíz", "Pastura Natural"], "Has": [0.0]*4})
+        if "df_base_forrajera" not in st.session_state:
+            st.session_state.df_base_forrajera = pd.DataFrame({
+                "Categoria": [
+                    "Superficie de pasturas en producción",
+                    "Superficie de verdeos (invierno y verano)",
+                    "Superficie campo natural"
+                ],
+                "Has": [0.0]*3
+            })
+
+        df_base_forrajera_editado = st.data_editor(
+            st.session_state.df_base_forrajera,
+            key="editor_base_forrajera",
+            use_container_width=True,
+            num_rows="fixed"
         )
+
+        if st.button("💾 Guardar Base Forrajera", key="guardar_base_forrajera"):
+            st.session_state.df_base_forrajera = df_base_forrajera_editado
+            st.success("✅ Base Forrajera guardada correctamente.")
 
         st.markdown("---")
 
-        # Hacienda de terceros
-        st.subheader("Hacienda de terceros")
-        mostrar_editor_dataframe(
-            "df_hacienda", "df_hacienda_editor",
-            pd.DataFrame({
+        # === HACIENDA DE TERCEROS ===
+        st.subheader("Hacienda de Terceros")
+        if "df_hacienda" not in st.session_state:
+            st.session_state.df_hacienda = pd.DataFrame({
                 "Categoría": ["Novillos", "Vacas", "Vaquillonas", "Terneros", "Terneras", "Total"],
                 "Cantidad": [0]*6,
                 "Pastoreo o capitalización (Precio o % Propio)": [0.0]*6
             })
+
+        df_hacienda_editado = st.data_editor(
+            st.session_state.df_hacienda,
+            key="editor_hacienda",
+            use_container_width=True,
+            num_rows="fixed"
         )
+
+        if st.button("💾 Guardar Hacienda de Terceros", key="guardar_hacienda"):
+            st.session_state.df_hacienda = df_hacienda_editado
+            st.success("✅ Hacienda de Terceros guardada correctamente.")
 
         st.markdown("---")
 
-        # Otras Actividades
+        # === OTRAS ACTIVIDADES ===
         st.subheader("Otras Actividades")
-        mostrar_editor_dataframe(
-            "df_otros", "df_otros_editor",
-            pd.DataFrame({"Descripción": ["Sin especificar"]})
+        if "df_otros" not in st.session_state:
+            st.session_state.df_otros = pd.DataFrame({"Descripción": ["Sin especificar"]})
+
+        df_otros_editado = st.data_editor(
+            st.session_state.df_otros,
+            key="editor_otros",
+            use_container_width=True,
+            num_rows="fixed"
         )
 
-        st.markdown("---")
-
-        # Botón para confirmar guardado del bloque completo de Ganadería
-        if st.button("💾 Guardar todo el bloque de Ganadería", key="guardar_bloque_ganaderia"):
-            st.success("✅ Todo el bloque de Ganadería fue guardado correctamente.")
-
-
-        
-
-
-
-
-
-
-
+        if st.button("💾 Guardar Otras Actividades", key="guardar_otros"):
+            st.session_state.df_otros = df_otros_editado
+            st.success("✅ Otras Actividades guardadas correctamente.")
 
 # === BLOQUE EXPORTACIÓN COMPLETA ===
 output = io.BytesIO()
@@ -1607,7 +1977,7 @@ output = io.BytesIO()
 campanias_fijas = {
     "actual": "ej 24/25",
     "hace_1": "ej 23/24",
-    "hace_2": "ej 22/23"
+    "un_año_adelante": "ej 25/26"
 }
 nombres_visibles = st.session_state.get("nombres_visibles_campanias", {})
 
@@ -1657,17 +2027,21 @@ df_clientes = crear_df(st.session_state.get("clientes", []), ["Denominación", "
 df_competidores = crear_df(st.session_state.get("competidores", []), ["Denominación", "CUIT", "Teléfono", "Segmento", "Participacion del Mercado %", "Condiciones de ventas"])
 df_referencias_bancarias = crear_df(st.session_state.get("referencias_bancarias", []), ["Entidad Financiera", "Contacto", "Sucursal", "Tel", "Mail"])
 df_bancos = crear_df(st.session_state.get("bancos", []), [
-    "Entidad", "Saldo Préstamos Amortizables", "Garantía (*)", "Valor de la Cuota",
+    "Entidad", "Tipo de Moneda","Margen Total Asignado (Calificación)","Saldo Préstamos Amortizables", "Garantía (*)", "Valor de la Cuota",
     "Régimen de Amortización (**)", "Cantidad Cuotas Faltantes", "Descuento de Cheques Utilizado",
     "Adelanto en Cta Cte Utilizado", "Avales SGR", "Tarjeta de Crédito Utilizado", "Leasing Utilizado",
-    "Impo/Expo Utilizado", "Tasa Promedio $", "Tasa Promedio USD", "Tipo de Moneda"
+    "Impo/Expo Utilizado", "Tasa Promedio $", "Tasa Promedio USD", "Fecha desembolso (dd/mm/yyyy)","Fecha último vencimiento (dd/mm/yyyy)"
 ])
+
 df_mercado = crear_df(st.session_state.get("mercado", []), [
     "Obligaciones Negociables", "Descuento de Cheques Propios", "Pagaré Bursátil",
     "Organismos Multilaterales (CFI)", "Otros (1)", "Otros (2)", "Tasa Promedio $",
     "Tasa Promedio USD", "Tipo de Moneda"
 ])
 df_deudas_com = crear_df(st.session_state.get("deudas_comerciales", []), ["A favor de", "Tipo de Moneda", "Monto", "Garantía", "Tasa", "Plazo (días)"])
+
+
+
 df_ventas_interno = crear_df(st.session_state.get("ventas_interno", []), ["Mes", "Tipo", "Subtipo", "Año en curso", "Año 1", "Año 2", "Año 3"])
 df_ventas_externo = crear_df(st.session_state.get("ventas_externo", []), ["Mes", "Tipo", "Subtipo", "Año en curso", "Año 1", "Año 2", "Año 3", "Región"])
 df_compras = crear_df(st.session_state.get("compras", []), ["Mes", "Tipo", "Subtipo", "Año en curso", "Año 1", "Año 2", "Año 3"])
@@ -1727,6 +2101,7 @@ def exportar_indices(nombre_df, nombre_hoja, columnas=["Ítem", "Valor"]):
         df.to_excel(writer, sheet_name=nombre_hoja, index=False)
     else:
         pd.DataFrame(columns=columnas).to_excel(writer, sheet_name=nombre_hoja, index=False)
+
 # Nuevos bloques que faltan exportar
 df_cria = crear_df(st.session_state.get("df_cria", []), ["Vacas", "Vaquillonas", "Terneros/as", "Toros"])
 df_indices_cria = crear_df(st.session_state.get("df_indices_cria", []), ["Índice", "Valor"])
@@ -1737,11 +2112,92 @@ df_indices_feedlot = crear_df(st.session_state.get("df_indices_feedlot", []), ["
 df_tambo = crear_df(st.session_state.get("df_tambo", []), ["Vacas (VO+VS)", "Vaquillonas", "Terneras", "Terneros", "Toros"])
 df_indices_tambo = crear_df(st.session_state.get("df_indices_tambo", []), ["Ítem", "Valor"])
 
+df_resumen_deuda = resumen_final.copy()
+
+df_comb_interno = st.session_state.get("df_combinado_ventas_interno", pd.DataFrame())
+df_comb_externo = st.session_state.get("df_combinado_ventas_externo", pd.DataFrame())
+df_comb_compras = st.session_state.get("df_combinado_compras", pd.DataFrame())
+
+df_resumen12 = st.session_state.get("resumen_12_meses_ventas", pd.DataFrame())
+df_resumen_general_ventas = st.session_state.get("resumen_general_ventas", pd.DataFrame())
+df_resumen_general_compras = st.session_state.get("resumen_general_compras", pd.DataFrame())
+
+# === GENERACIÓN MANUAL DE LOS RESÚMENES ANUALES ===
+meses_ordenados = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+columnas_anios = ["Año actual", "Año 1", "Año 2", "Año 3"]
+
+def crear_resumen(df):
+    if df.empty:
+        base = pd.DataFrame(columns=["Mes"] + columnas_anios)
+        base["Mes"] = meses_ordenados
+        for col in columnas_anios:
+            base[col] = 0
+        return base
+    else:
+        df = df.copy()
+        df["Mes"] = df["Mes"].astype(str)
+        df["Tipo"] = df.get("Tipo", "SIN TIPO")  # seguridad
+        columnas_a_sumar = [col for col in columnas_anios if col in df.columns]
+        resumen = df.groupby("Mes")[columnas_a_sumar].sum().reindex(meses_ordenados, fill_value=0).reset_index()
+        resumen.columns = ["Mes"] + columnas_a_sumar
+        return resumen
+
+# Crear los resúmenes desde los session_state
+ventas_df = pd.concat(st.session_state.get("ventas_por_tipo", {}).values(), ignore_index=True) if "ventas_por_tipo" in st.session_state else st.session_state.get("ventas_interno", pd.DataFrame())
+compras_df = st.session_state.get("compras", pd.DataFrame())
+
+resumen_ventas_total = crear_resumen(ventas_df)
+resumen_compras_total = crear_resumen(compras_df)
+resumen_ventas_simple = st.session_state.get("resumen_ventas_simple", pd.DataFrame())
+resumen_compras_simple = st.session_state.get("resumen_compras_simple", pd.DataFrame())
+
+# === ACTUALIZAR TAB 2: Consolidar los data_editor por tipo antes de exportar ===
+def reconstruir_df_completo(nombre_variable_session, tipos_validos):
+    dfs = []
+    for tipo in tipos_validos:
+        key_widget = f"{nombre_variable_session}_{tipo}"
+        df = st.session_state.get(key_widget)
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            dfs.append(df)
+    if dfs:
+        st.session_state[nombre_variable_session] = pd.concat(dfs, ignore_index=True)
+
+tipos_fijos = ["AGROPECUARIO", "INDUSTRIA", "COMERCIO", "SERVICIOS", "CONSTRUCCION"]
+
+for nombre in ["ventas_interno", "ventas_externo", "compras"]:
+    reconstruir_df_completo(nombre, tipos_fijos)
+
+
+def ordenar_por_tipo(df):
+    orden = {"AGROPECUARIO": 0, "INDUSTRIA": 1, "COMERCIO": 2, "SERVICIOS": 3, "CONSTRUCCION": 4}
+    return df.sort_values(by="Tipo", key=lambda x: x.map(orden)).reset_index(drop=True)
+
+
+# Consolidar y ordenar por tipo
+df_ventas_interno = ordenar_por_tipo(st.session_state["ventas_interno"])
+df_ventas_externo = ordenar_por_tipo(st.session_state["ventas_externo"])
+df_compras = ordenar_por_tipo(st.session_state["compras"])
+
+# === GENERAR TABLA DE COMERCIALIZACIÓN Y PROVEEDORES ===
+actividades = TODAS_LAS_ACTIVIDADES  # Asegurate que TODAS estén, no solo las seleccionadas
+
+comercializa = st.session_state.respuestas.get("Comercializa", {})
+proveedores = st.session_state.respuestas.get("Proveedores", {})
+
+fila_resultado = {}
+
+for act in actividades:
+    fila_resultado[f"Comercializa.{act}"] = comercializa.get(act, "")
+    fila_resultado[f"Proveedores.{act}"] = proveedores.get(act, "")
+
+df_comercializacion = pd.DataFrame([fila_resultado])
 
 # Guardar a Excel
 with pd.ExcelWriter(output, engine="openpyxl") as writer:
     #df_respuestas.to_excel(writer, sheet_name="Respuestas", index=False)
     #df_info_general.to_excel(writer, sheet_name="Respuestas Simples", index=False)
+
     df_info_general_unificado.to_excel(writer, sheet_name="Resumen Info General", index=False)
     df_avales.to_excel(writer, sheet_name="Avales", index=False)
     df_filiatorios.to_excel(writer, sheet_name="Filiatorios", index=False)
@@ -1757,10 +2213,14 @@ with pd.ExcelWriter(output, engine="openpyxl") as writer:
     df_mercado.to_excel(writer, sheet_name="Deuda Mercado", index=False)
     df_deudas_com.to_excel(writer, sheet_name="Deuda Comercial", index=False)
 
+    df_resumen_deuda.to_excel(writer, sheet_name="Resumen Deuda Bancaria", index=False)
+
     df_ventas_interno.to_excel(writer, sheet_name="Ventas Interno", index=False)
     df_ventas_externo.to_excel(writer, sheet_name="Ventas Externo", index=False)
     df_compras.to_excel(writer, sheet_name="Compras", index=False)
     df_planes_ventas.to_excel(writer, sheet_name="Plan Ventas Actividad", index=False)
+
+    
 
     df_campos_propios.to_excel(writer, sheet_name="Campos Propios", index=False)
     df_campos_arrendados.to_excel(writer, sheet_name="Campos Arrendados", index=False)
@@ -1781,27 +2241,106 @@ with pd.ExcelWriter(output, engine="openpyxl") as writer:
     exportar_indices("indices_feedlot", "Índices Feedlot")
     exportar_indices("indices_tambo", "Índices Tambo")
 
-    
+    # Exportar formularios base si están disponibles
+    for clave_df in ["ventas_interno", "ventas_externo", "compras"]:
+        df_base = st.session_state.get(clave_df)
+        if df_base is not None and not df_base.empty:
+            nombre_hoja = clave_df.replace("_", " ").title()
+            df_base.to_excel(writer, sheet_name=nombre_hoja, index=False)
+
+    # Exportar resúmenes por subtipo (últimos 12 meses) y comparativos anuales
+    for nombre in ["ventas_interno", "ventas_externo", "compras"]:
+        df_subtipo = st.session_state.get(f"df_por_subtipo_12m_{nombre}")
+        df_anual = st.session_state.get(f"df_comparativo_anual_{nombre}")
+
+        if df_subtipo is not None and not df_subtipo.empty:
+            hoja_subtipo = f"Resumen 12M - {nombre.replace('_', ' ').title()}"
+            df_subtipo.to_excel(writer, sheet_name=hoja_subtipo, index=False)
+
+        if df_anual is not None and not df_anual.empty:
+            hoja_anual = f"Comparativo - {nombre.replace('_', ' ').title()}"
+            df_anual.to_excel(writer, sheet_name=hoja_anual, index=False)
+
+
+    df_comb_total = pd.concat([
+        df_comb_interno.assign(Origen="Ventas Interno"),
+        df_comb_externo.assign(Origen="Ventas Externo"),
+        df_comb_compras.assign(Origen="Compras")
+    ], ignore_index=True)
+    df_comb_total.to_excel(writer, sheet_name="Datos Detallados", index=False)
+
+    # Guardar cada resumen en su hoja
+    df_resumen12.to_excel(writer, sheet_name="Resumen 12 Meses", index=False)
+
+    # === Exportar los resúmenes simples de ventas y compras al Excel ===
+    resumen_ventas_simple = st.session_state.get("resumen_ventas_simple", pd.DataFrame())
+    resumen_compras_simple = st.session_state.get("resumen_compras_simple", pd.DataFrame())
+
+    orden_cols = ["Mes", "Año en curso", "Año 1", "Año 2", "Año 3"]
+    meses_largos = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+
+    def asegurar_formato_resumen(df):
+        if df is None or df.empty:
+            return pd.DataFrame({
+                "Mes": meses_largos,
+                "Año en curso": [0]*12,
+                "Año 1": [0]*12,
+                "Año 2": [0]*12,
+                "Año 3": [0]*12
+            })
+        else:
+            df = df.copy()
+            df = df.set_index("Mes").reindex(meses_largos, fill_value=0).reset_index()
+            df = df[orden_cols]
+            return df
+
+    df_resumen_ventas_final = asegurar_formato_resumen(resumen_ventas_simple)
+    df_resumen_compras_final = asegurar_formato_resumen(resumen_compras_simple)
+
+    df_resumen_ventas_final.to_excel(writer, sheet_name="Resumen Ventas", index=False)
+    df_resumen_compras_final.to_excel(writer, sheet_name="Resumen Compras", index=False)
+
+    df_comercializacion.to_excel(writer, sheet_name="Comercialización", index=False)
+
+
 output.seek(0)
 
 with st.sidebar:
     if st.button("💾 Guardar progreso para continuar luego"):
         try:
             def clave_permitida(k):
-                return not (
-                    k.startswith("delete_")
-                    or k.startswith("eliminar_cultivo_")
-                    or k.startswith("FormSubmitter:")
-                    or "Agregar Cultivo" in k
-                )
+                claves_widget_conflictivas = [
+                    "delete_", "eliminar_cultivo_", "FormSubmitter:", "guardar_",
+                    "Agregar", "_", "ventas_interno_", "ventas_externo_", "compras_",
+                    "btn_guardar_", "editor_actividad_"
+                ]
+                if k == "planes_guardados_por_actividad":
+                    return True
+                return not any(k.startswith(prefijo) or k == prefijo for prefijo in claves_widget_conflictivas)
+
             estado_a_guardar = {
                 k: v for k, v in st.session_state.items() if clave_permitida(k)
             }
+
             with open(PROGRESO_FILE, "wb") as f:
                 pickle.dump(estado_a_guardar, f)
+
             st.success("✅ Progreso guardado correctamente.")
+
         except Exception as e:
             st.error(f"❌ Error al guardar el progreso: {e}")
+
+    # ✅ BOTÓN PARA BORRAR ARCHIVO, SI EXISTE
+    if os.path.exists(PROGRESO_FILE):
+        if st.button(f"❌ Borrar {PROGRESO_FILE[:-4]}"):
+            try:
+                os.remove(PROGRESO_FILE)
+                st.success("✅ Archivo de progreso eliminado correctamente.")
+                st.session_state.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error inesperado al eliminar el archivo: {e}")
 
     descargado = st.download_button(
         label="📥 Descargar archivo para compartir a QTM",
@@ -1812,14 +2351,33 @@ with st.sidebar:
 
     if descargado:
         st.session_state["descarga_confirmada"] = True
-        st.rerun()  # <<--- ESTA LÍNEA ES LA CLAVE
+        st.rerun()
 
-    # Opción para borrar el progreso actual
-    if os.path.exists(PROGRESO_FILE):
-        if st.button(f"❌ Borrar progreso guardado para {codigo_usuario}"):
-            try:
-                os.remove(PROGRESO_FILE)
-                st.success("✅ Progreso eliminado. Refrescá la página para comenzar desde cero.")
-                st.stop()
-            except Exception as e:
-                st.error(f"❌ Error al intentar borrar el progreso: {e}")
+    # Este botón aparece luego de descargar y puede borrar archivo o limpiar sesión
+    if st.session_state.get("descarga_confirmada"):
+        st.success("✅ Archivo descargado correctamente")
+        st.markdown("¿Deseás eliminar el progreso guardado y cerrar sesión o continuar completando el formulario?")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("❌ Borrar progreso para cerrar la sesión"):
+                try:
+                    # Intentamos borrar el archivo solo si existe
+                    if os.path.exists(PROGRESO_FILE):
+                        os.remove(PROGRESO_FILE)
+                        st.success("✅ Archivo de progreso eliminado correctamente.")
+                    else:
+                        st.warning("⚠️ No se encontró el archivo de progreso, pero se limpiará la sesión igualmente.")
+
+                    # Siempre limpiamos la sesión
+                    for key in list(st.session_state.keys()):
+                        del st.session_state[key]
+
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ Error inesperado al limpiar la sesión: {e}")
+
+        with col2:
+            st.button("🔄 Seguir cargando el formulario")
